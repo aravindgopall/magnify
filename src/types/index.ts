@@ -1,0 +1,226 @@
+import { z } from 'zod';
+
+export const GroupingStrategySchema = z.enum(['fixed', 'heading', 'toc', 'hybrid']);
+export type GroupingStrategy = z.infer<typeof GroupingStrategySchema>;
+
+export const OutputFormatSchema = z.enum(['json', 'markdown', 'summary', 'search-index']);
+export type OutputFormat = z.infer<typeof OutputFormatSchema>;
+
+export interface PDFDocument {
+  id: string;
+  source: string | Buffer;
+  metadata: DocumentMetadata;
+  pages: Page[];
+  toc?: TableOfContents;
+}
+
+export interface DocumentMetadata {
+  title?: string;
+  author?: string;
+  subject?: string;
+  creator?: string;
+  producer?: string;
+  creationDate?: Date;
+  pageCount: number;
+}
+
+export interface Page {
+  number: number;
+  text: string;
+  rawText: string;
+  width: number;
+  height: number;
+  elements: PageElement[];
+}
+
+export interface PageElement {
+  type: 'text' | 'heading' | 'table' | 'image' | 'list';
+  text: string;
+  bbox?: BoundingBox;
+  level?: number;
+}
+
+export interface BoundingBox {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface TableOfContents {
+  items: TOCItem[];
+}
+
+export interface TOCItem {
+  title: string;
+  level: number;
+  pageNumber: number;
+  children?: TOCItem[];
+}
+
+export interface DocumentGroup {
+  id: string;
+  type: GroupingStrategy;
+  title?: string;
+  startPage: number;
+  endPage: number;
+  pages: Page[];
+  metadata?: Record<string, unknown>;
+}
+
+export interface HeadingInfo {
+  text: string;
+  level: number;
+  pageNumber: number;
+  position: number;
+}
+
+export interface GroupingConfig {
+  strategy: GroupingStrategy;
+  fixedPagesPerGroup?: number;
+  headingLevels?: number[];
+  minGroupSize?: number;
+  maxGroupSize?: number;
+  fallbackStrategy?: GroupingStrategy;
+}
+
+export const SubagentConfigSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  description: z.string().optional(),
+  maxRetries: z.number().default(3),
+  timeout: z.number().default(60000),
+  extractionSchema: z.record(z.unknown()).optional(),
+  customPrompt: z.string().optional(),
+});
+export type SubagentConfig = z.infer<typeof SubagentConfigSchema>;
+
+export interface SubagentResult {
+  agentId: string;
+  groupId: string;
+  success: boolean;
+  data?: ExtractedData;
+  error?: string;
+  duration: number;
+  tokensUsed?: number;
+}
+
+export interface ExtractedData {
+  groupId: string;
+  title?: string;
+  summary?: string;
+  entities?: Entity[];
+  sections?: Section[];
+  tables?: TableData[];
+  metadata?: Record<string, unknown>;
+  rawContent?: string;
+}
+
+export interface Entity {
+  type: string;
+  name: string;
+  value?: string;
+  confidence: number;
+  location?: Location;
+}
+
+export interface Location {
+  pageNumber: number;
+  bbox?: BoundingBox;
+}
+
+export interface Section {
+  heading: string;
+  content: string;
+  level: number;
+  subsections?: Section[];
+}
+
+export interface TableData {
+  headers: string[];
+  rows: string[][];
+  caption?: string;
+  pageNumber: number;
+}
+
+export interface PipelineConfig {
+  grouping: GroupingConfig;
+  extraction?: ExtractionConfig;
+  output: OutputConfig;
+  execution: ExecutionConfig;
+}
+
+export interface ExtractionConfig {
+  schema?: Record<string, unknown>;
+  prompts?: Record<string, string>;
+  defaultPrompt?: string;
+}
+
+export interface OutputConfig {
+  format: OutputFormat;
+  includeMetadata: boolean;
+  includeSourcePages: boolean;
+  prettyPrint: boolean;
+}
+
+export interface ExecutionConfig {
+  maxConcurrency: number;
+  retryAttempts: number;
+  retryDelay: number;
+  timeout: number;
+  continueOnError: boolean;
+}
+
+export interface PipelineResult {
+  documentId: string;
+  status: 'success' | 'partial' | 'failed';
+  groups: GroupResult[];
+  mergedOutput: MergedOutput;
+  statistics: PipelineStatistics;
+  errors: PipelineError[];
+}
+
+export interface GroupResult {
+  groupId: string;
+  status: 'success' | 'failed' | 'skipped';
+  extraction?: ExtractedData;
+  duration: number;
+  error?: string;
+}
+
+export interface MergedOutput {
+  title?: string;
+  summary?: string;
+  sections: Section[];
+  entities: Entity[];
+  tables: TableData[];
+  metadata: Record<string, unknown>;
+  fullContent?: string;
+}
+
+export interface PipelineStatistics {
+  totalPages: number;
+  totalGroups: number;
+  successfulGroups: number;
+  failedGroups: number;
+  totalDuration: number;
+  averageGroupDuration: number;
+  totalTokensUsed: number;
+}
+
+export interface PipelineError {
+  groupId?: string;
+  stage: 'parsing' | 'grouping' | 'extraction' | 'merging';
+  message: string;
+  details?: unknown;
+}
+
+export interface Subagent {
+  id: string;
+  config: SubagentConfig;
+  execute(group: DocumentGroup): Promise<SubagentResult>;
+}
+
+export interface AgentFactory {
+  createAgent(config: SubagentConfig): Subagent;
+}
