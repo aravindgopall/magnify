@@ -8,19 +8,19 @@ export declare const GroupingConfigSchema: z.ZodObject<{
     maxGroupSize: z.ZodOptional<z.ZodNumber>;
     fallbackStrategy: z.ZodOptional<z.ZodEnum<["fixed", "heading", "toc", "hybrid"]>>;
 }, "strip", z.ZodTypeAny, {
-    strategy: "heading" | "fixed" | "toc" | "hybrid";
+    strategy: "fixed" | "heading" | "toc" | "hybrid";
     fixedPagesPerGroup?: number | undefined;
+    headingLevels?: number[] | undefined;
     minGroupSize?: number | undefined;
     maxGroupSize?: number | undefined;
-    headingLevels?: number[] | undefined;
-    fallbackStrategy?: "heading" | "fixed" | "toc" | "hybrid" | undefined;
+    fallbackStrategy?: "fixed" | "heading" | "toc" | "hybrid" | undefined;
 }, {
-    strategy: "heading" | "fixed" | "toc" | "hybrid";
+    strategy: "fixed" | "heading" | "toc" | "hybrid";
     fixedPagesPerGroup?: number | undefined;
+    headingLevels?: number[] | undefined;
     minGroupSize?: number | undefined;
     maxGroupSize?: number | undefined;
-    headingLevels?: number[] | undefined;
-    fallbackStrategy?: "heading" | "fixed" | "toc" | "hybrid" | undefined;
+    fallbackStrategy?: "fixed" | "heading" | "toc" | "hybrid" | undefined;
 }>;
 export declare const ExtractionConfigSchema: z.ZodObject<{
     schema: z.ZodOptional<z.ZodRecord<z.ZodString, z.ZodUnknown>>;
@@ -41,12 +41,12 @@ export declare const OutputConfigSchema: z.ZodObject<{
     includeSourcePages: z.ZodDefault<z.ZodBoolean>;
     prettyPrint: z.ZodDefault<z.ZodBoolean>;
 }, "strip", z.ZodTypeAny, {
-    format: "summary" | "json" | "markdown" | "search-index";
+    format: "json" | "markdown" | "summary" | "search-index";
     includeMetadata: boolean;
     includeSourcePages: boolean;
     prettyPrint: boolean;
 }, {
-    format: "summary" | "json" | "markdown" | "search-index";
+    format: "json" | "markdown" | "summary" | "search-index";
     includeMetadata?: boolean | undefined;
     includeSourcePages?: boolean | undefined;
     prettyPrint?: boolean | undefined;
@@ -79,19 +79,19 @@ export declare const PipelineConfigSchema: z.ZodObject<{
         maxGroupSize: z.ZodOptional<z.ZodNumber>;
         fallbackStrategy: z.ZodOptional<z.ZodEnum<["fixed", "heading", "toc", "hybrid"]>>;
     }, "strip", z.ZodTypeAny, {
-        strategy: "heading" | "fixed" | "toc" | "hybrid";
+        strategy: "fixed" | "heading" | "toc" | "hybrid";
         fixedPagesPerGroup?: number | undefined;
+        headingLevels?: number[] | undefined;
         minGroupSize?: number | undefined;
         maxGroupSize?: number | undefined;
-        headingLevels?: number[] | undefined;
-        fallbackStrategy?: "heading" | "fixed" | "toc" | "hybrid" | undefined;
+        fallbackStrategy?: "fixed" | "heading" | "toc" | "hybrid" | undefined;
     }, {
-        strategy: "heading" | "fixed" | "toc" | "hybrid";
+        strategy: "fixed" | "heading" | "toc" | "hybrid";
         fixedPagesPerGroup?: number | undefined;
+        headingLevels?: number[] | undefined;
         minGroupSize?: number | undefined;
         maxGroupSize?: number | undefined;
-        headingLevels?: number[] | undefined;
-        fallbackStrategy?: "heading" | "fixed" | "toc" | "hybrid" | undefined;
+        fallbackStrategy?: "fixed" | "heading" | "toc" | "hybrid" | undefined;
     }>;
     extraction: z.ZodOptional<z.ZodObject<{
         schema: z.ZodOptional<z.ZodRecord<z.ZodString, z.ZodUnknown>>;
@@ -112,12 +112,12 @@ export declare const PipelineConfigSchema: z.ZodObject<{
         includeSourcePages: z.ZodDefault<z.ZodBoolean>;
         prettyPrint: z.ZodDefault<z.ZodBoolean>;
     }, "strip", z.ZodTypeAny, {
-        format: "summary" | "json" | "markdown" | "search-index";
+        format: "json" | "markdown" | "summary" | "search-index";
         includeMetadata: boolean;
         includeSourcePages: boolean;
         prettyPrint: boolean;
     }, {
-        format: "summary" | "json" | "markdown" | "search-index";
+        format: "json" | "markdown" | "summary" | "search-index";
         includeMetadata?: boolean | undefined;
         includeSourcePages?: boolean | undefined;
         prettyPrint?: boolean | undefined;
@@ -143,15 +143,15 @@ export declare const PipelineConfigSchema: z.ZodObject<{
     }>;
 }, "strip", z.ZodTypeAny, {
     grouping: {
-        strategy: "heading" | "fixed" | "toc" | "hybrid";
+        strategy: "fixed" | "heading" | "toc" | "hybrid";
         fixedPagesPerGroup?: number | undefined;
+        headingLevels?: number[] | undefined;
         minGroupSize?: number | undefined;
         maxGroupSize?: number | undefined;
-        headingLevels?: number[] | undefined;
-        fallbackStrategy?: "heading" | "fixed" | "toc" | "hybrid" | undefined;
+        fallbackStrategy?: "fixed" | "heading" | "toc" | "hybrid" | undefined;
     };
     output: {
-        format: "summary" | "json" | "markdown" | "search-index";
+        format: "json" | "markdown" | "summary" | "search-index";
         includeMetadata: boolean;
         includeSourcePages: boolean;
         prettyPrint: boolean;
@@ -170,15 +170,15 @@ export declare const PipelineConfigSchema: z.ZodObject<{
     } | undefined;
 }, {
     grouping: {
-        strategy: "heading" | "fixed" | "toc" | "hybrid";
+        strategy: "fixed" | "heading" | "toc" | "hybrid";
         fixedPagesPerGroup?: number | undefined;
+        headingLevels?: number[] | undefined;
         minGroupSize?: number | undefined;
         maxGroupSize?: number | undefined;
-        headingLevels?: number[] | undefined;
-        fallbackStrategy?: "heading" | "fixed" | "toc" | "hybrid" | undefined;
+        fallbackStrategy?: "fixed" | "heading" | "toc" | "hybrid" | undefined;
     };
     output: {
-        format: "summary" | "json" | "markdown" | "search-index";
+        format: "json" | "markdown" | "summary" | "search-index";
         includeMetadata?: boolean | undefined;
         includeSourcePages?: boolean | undefined;
         prettyPrint?: boolean | undefined;

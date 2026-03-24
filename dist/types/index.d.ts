@@ -1,5 +1,5 @@
 import { z } from 'zod';
-export declare const GroupingStrategySchema: z.ZodEnum<["fixed", "heading", "toc", "hybrid"]>;
+export declare const GroupingStrategySchema: z.ZodEnum<["fixed", "heading", "toc", "hybrid", "range"]>;
 export type GroupingStrategy = z.infer<typeof GroupingStrategySchema>;
 export declare const OutputFormatSchema: z.ZodEnum<["json", "markdown", "summary", "search-index"]>;
 export type OutputFormat = z.infer<typeof OutputFormatSchema>;
@@ -9,6 +9,7 @@ export interface PDFDocument {
     metadata: DocumentMetadata;
     pages: Page[];
     toc?: TableOfContents;
+    pdfType?: 'digital' | 'scanned' | 'hybrid';
 }
 export interface DocumentMetadata {
     title?: string;
@@ -26,6 +27,29 @@ export interface Page {
     width: number;
     height: number;
     elements: PageElement[];
+    textBlocks?: TextBlock[];
+    tables?: TableData[];
+    images?: ImageData[];
+}
+export interface TextBlock {
+    text: string;
+    font_size: number;
+    is_bold: boolean;
+    bbox: BoundingBox;
+}
+export interface TableData {
+    headers: string[];
+    rows: string[][];
+    caption?: string;
+    pageNumber?: number;
+}
+export interface ImageData {
+    page_number: number;
+    image_index: number;
+    width: number;
+    height: number;
+    file_path?: string;
+    image_base64?: string;
 }
 export interface PageElement {
     type: 'text' | 'heading' | 'table' | 'image' | 'list';
@@ -56,6 +80,9 @@ export interface DocumentGroup {
     endPage: number;
     pages: Page[];
     metadata?: Record<string, unknown>;
+    fullText?: string;
+    tables?: TableData[];
+    imagePaths?: string[];
 }
 export interface HeadingInfo {
     text: string;
@@ -70,6 +97,38 @@ export interface GroupingConfig {
     minGroupSize?: number;
     maxGroupSize?: number;
     fallbackStrategy?: GroupingStrategy;
+}
+export interface PythonExtractionResult {
+    doc_id: string;
+    pdf_type: 'digital' | 'scanned' | 'hybrid';
+    metadata: Record<string, any>;
+    pages: PythonPageObject[];
+    groups: PythonGroupObject[];
+    toc?: Array<{
+        level: number;
+        title: string;
+        pageNumber: number;
+    }>;
+}
+export interface PythonPageObject {
+    page_number: number;
+    text: string;
+    text_blocks: TextBlock[];
+    tables: TableData[];
+    images: ImageData[];
+    width: number;
+    height: number;
+}
+export interface PythonGroupObject {
+    group_id: string;
+    doc_id: string;
+    strategy: 'toc' | 'heading' | 'range';
+    title: string;
+    start_page: number;
+    end_page: number;
+    full_text: string;
+    tables: TableData[];
+    image_paths: string[];
 }
 export declare const SubagentConfigSchema: z.ZodObject<{
     id: z.ZodString;
@@ -132,12 +191,6 @@ export interface Section {
     content: string;
     level: number;
     subsections?: Section[];
-}
-export interface TableData {
-    headers: string[];
-    rows: string[][];
-    caption?: string;
-    pageNumber: number;
 }
 export interface PipelineConfig {
     grouping: GroupingConfig;

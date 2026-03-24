@@ -28,7 +28,7 @@ export declare abstract class LLMClient {
 }
 export declare class MockLLMClient extends LLMClient {
     complete(messages: LLMMessage[]): Promise<LLMResponse>;
-    completeWithJSON<T>(_messages: LLMMessage[], _schema?: Record<string, unknown>): Promise<T>;
+    completeWithJSON<T>(messages: LLMMessage[], _schema?: Record<string, unknown>): Promise<T>;
 }
 export interface OpenAIConfig extends LLMClientConfig {
     apiKey: string;
@@ -39,7 +39,18 @@ export declare class OpenAIClient extends LLMClient {
     complete(messages: LLMMessage[]): Promise<LLMResponse>;
     completeWithJSON<T>(messages: LLMMessage[], _schema?: Record<string, unknown>): Promise<T>;
 }
+export interface LiteLLMConfig extends LLMClientConfig {
+    apiKey: string;
+    baseURL: string;
+}
+export declare class LiteLLMClient extends LLMClient {
+    private apiKey;
+    private baseURL;
+    constructor(config: LiteLLMConfig);
+    complete(messages: LLMMessage[]): Promise<LLMResponse>;
+    completeWithJSON<T>(messages: LLMMessage[], _schema?: Record<string, unknown>): Promise<T>;
+}
 export declare function createLLMClient(config: LLMClientConfig & {
-    provider?: 'openai' | 'mock';
+    provider?: 'openai' | 'litellm' | 'mock';
 }): LLMClient;
 //# sourceMappingURL=client.d.ts.map

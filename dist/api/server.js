@@ -9,6 +9,8 @@ const express_1 = __importDefault(require("express"));
 const cors_1 = __importDefault(require("cors"));
 const index_js_1 = require("../llm/index.js");
 const routes_js_1 = require("./routes.js");
+const agent_routes_js_1 = require("./agent-routes.js");
+const pi_mono_routes_js_1 = require("./pi-mono-routes.js");
 const defaultServerConfig = {
     port: 3000,
     host: '0.0.0.0',
@@ -22,6 +24,7 @@ function createServer(config) {
         provider: finalConfig.llm.provider,
         apiKey: finalConfig.llm.apiKey,
         model: finalConfig.llm.model,
+        baseURL: finalConfig.llm.baseURL,
     });
     const context = (0, routes_js_1.createAPIContext)(llmClient);
     const app = (0, express_1.default)();
@@ -29,15 +32,21 @@ function createServer(config) {
     app.use(express_1.default.json({ limit: '50mb' }));
     app.use(express_1.default.urlencoded({ extended: true, limit: '50mb' }));
     app.use('/api', (0, routes_js_1.createRouter)(context));
+    app.use('/api', (0, agent_routes_js_1.createAgentRoutes)(context));
+    app.use('/api', (0, pi_mono_routes_js_1.createPiMonoRoutes)(context));
     app.get('/', (_req, res) => {
         res.json({
             name: 'Magnify - Semantic PDF Scraper',
-            version: '2.0.0',
+            version: '2.1.0',
             description: 'Upload once, query many times with LLM-powered orchestration',
-            llmConfigured: !!llmClient,
+            features: {
+                persistentStorage: true,
+                llmConfigured: !!llmClient,
+            },
             workflow: {
                 '1. Upload': 'POST /api/documents/upload - Upload and group PDF',
-                '2. Query': 'POST /api/query or POST /api/documents/:id/query - Query the document',
+                '2a. Query (Native)': 'POST /api/query - Query using native Magnify orchestrator',
+                '2b. Query (Pi-Mono)': 'POST /api/query-agents - Query using pi-mono multi-agent pipeline',
             },
             endpoints: {
                 'POST /api/documents/upload': 'Upload PDF, returns document ID and groups',
@@ -46,9 +55,11 @@ function createServer(config) {
                 'GET /api/documents/:id/groups': 'Get all groups for a document',
                 'GET /api/documents/:id/groups/:groupId': 'Get specific group details',
                 'DELETE /api/documents/:id': 'Delete a document',
-                'POST /api/query': 'Query any document (requires documentId in body)',
-                'POST /api/documents/:id/query': 'Query a specific document',
-                'GET /api/health': 'Health check',
+                'POST /api/query': 'Query any document (native Magnify)',
+                'POST /api/query-agents': 'Query using pi-mono multi-agent pipeline',
+                'POST /api/documents/:id/query': 'Query a specific document (native)',
+                'POST /api/documents/:id/query-agents': 'Query using pi-mono agents',
+                'GET /api/health': 'Health check with storage stats',
             },
         });
     });
@@ -61,13 +72,17 @@ function createServer(config) {
     });
     return { app, context };
 }
-function startServer(config) {
+async function startServer(config) {
     const finalConfig = { ...defaultServerConfig, ...config };
-    const { app } = createServer(finalConfig);
-    const server = app.listen(finalConfig.port, finalConfig.host, () => {
-        console.log(`Magnify PDF Scraper API running at http://${finalConfig.host}:${finalConfig.port}`);
-        console.log(`LLM Provider: ${finalConfig.llm.provider}`);
+    const { app, context } = createServer(finalConfig);
+    // Initialize document store (load persisted documents)
+    await (0, routes_js_1.initializeAPIContext)(context);
+    return new Promise((resolve) => {
+        const server = app.listen(finalConfig.port, finalConfig.host, () => {
+            console.log(`Magnify PDF Scraper API running at http://${finalConfig.host}:${finalConfig.port}`);
+            console.log(`LLM Provider: ${finalConfig.llm.provider}`);
+            resolve({ app, server });
+        });
     });
-    return { app, server };
 }
 //# sourceMappingURL=server.js.map

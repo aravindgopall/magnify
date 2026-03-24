@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-export const GroupingStrategySchema = z.enum(['fixed', 'heading', 'toc', 'hybrid']);
+export const GroupingStrategySchema = z.enum(['fixed', 'heading', 'toc', 'hybrid', 'range']);
 export type GroupingStrategy = z.infer<typeof GroupingStrategySchema>;
 
 export const OutputFormatSchema = z.enum(['json', 'markdown', 'summary', 'search-index']);
@@ -12,6 +12,7 @@ export interface PDFDocument {
   metadata: DocumentMetadata;
   pages: Page[];
   toc?: TableOfContents;
+  pdfType?: 'digital' | 'scanned' | 'hybrid';
 }
 
 export interface DocumentMetadata {
@@ -31,6 +32,33 @@ export interface Page {
   width: number;
   height: number;
   elements: PageElement[];
+  // New fields for enhanced extraction
+  textBlocks?: TextBlock[];
+  tables?: TableData[];
+  images?: ImageData[];
+}
+
+export interface TextBlock {
+  text: string;
+  font_size: number;
+  is_bold: boolean;
+  bbox: BoundingBox;
+}
+
+export interface TableData {
+  headers: string[];
+  rows: string[][];
+  caption?: string;
+  pageNumber?: number;
+}
+
+export interface ImageData {
+  page_number: number;
+  image_index: number;
+  width: number;
+  height: number;
+  file_path?: string;
+  image_base64?: string;
 }
 
 export interface PageElement {
@@ -66,6 +94,10 @@ export interface DocumentGroup {
   endPage: number;
   pages: Page[];
   metadata?: Record<string, unknown>;
+  // New fields for enhanced groups
+  fullText?: string;
+  tables?: TableData[];
+  imagePaths?: string[];
 }
 
 export interface HeadingInfo {
@@ -82,6 +114,42 @@ export interface GroupingConfig {
   minGroupSize?: number;
   maxGroupSize?: number;
   fallbackStrategy?: GroupingStrategy;
+}
+
+// Python extraction result types
+export interface PythonExtractionResult {
+  doc_id: string;
+  pdf_type: 'digital' | 'scanned' | 'hybrid';
+  metadata: Record<string, any>;
+  pages: PythonPageObject[];
+  groups: PythonGroupObject[];
+  toc?: Array<{
+    level: number;
+    title: string;
+    pageNumber: number;
+  }>;
+}
+
+export interface PythonPageObject {
+  page_number: number;
+  text: string;
+  text_blocks: TextBlock[];
+  tables: TableData[];
+  images: ImageData[];
+  width: number;
+  height: number;
+}
+
+export interface PythonGroupObject {
+  group_id: string;
+  doc_id: string;
+  strategy: 'toc' | 'heading' | 'range';
+  title: string;
+  start_page: number;
+  end_page: number;
+  full_text: string;
+  tables: TableData[];
+  image_paths: string[];
 }
 
 export const SubagentConfigSchema = z.object({
@@ -134,13 +202,6 @@ export interface Section {
   content: string;
   level: number;
   subsections?: Section[];
-}
-
-export interface TableData {
-  headers: string[];
-  rows: string[][];
-  caption?: string;
-  pageNumber: number;
 }
 
 export interface PipelineConfig {

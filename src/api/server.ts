@@ -1,16 +1,20 @@
 import express, { type Express, type Request, type Response, type NextFunction } from 'express';
 import cors from 'cors';
 import { createLLMClient, type LLMClient } from '../llm/index.js';
-import { createRouter, createAPIContext, type APIContext } from './routes.js';
+import { createRouter, createAPIContext, initializeAPIContext, type APIContext } from './routes.js';
+import { createAgentRoutes } from './agent-routes.js';
+import { createPiMonoRoutes } from './pi-mono-routes.js';
 
 export interface ServerConfig {
   port: number;
   host: string;
   llm: {
-    provider: 'openai' | 'mock';
+    provider: 'openai' | 'litellm' | 'mock';
     apiKey?: string;
     model?: string;
+    baseURL?: string;
   };
+  dataDir?: string;
 }
 
 const defaultServerConfig: ServerConfig = {
@@ -28,6 +32,7 @@ export function createServer(config?: Partial<ServerConfig>): { app: Express; co
     provider: finalConfig.llm.provider,
     apiKey: finalConfig.llm.apiKey,
     model: finalConfig.llm.model,
+    baseURL: finalConfig.llm.baseURL,
   });
   
   const context = createAPIContext(llmClient);
@@ -39,16 +44,22 @@ export function createServer(config?: Partial<ServerConfig>): { app: Express; co
   app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
   app.use('/api', createRouter(context));
+  app.use('/api', createAgentRoutes(context));
+  app.use('/api', createPiMonoRoutes(context));
 
   app.get('/', (_req: Request, res: Response) => {
     res.json({
       name: 'Magnify - Semantic PDF Scraper',
-      version: '2.0.0',
+      version: '2.1.0',
       description: 'Upload once, query many times with LLM-powered orchestration',
-      llmConfigured: !!llmClient,
+      features: {
+        persistentStorage: true,
+        llmConfigured: !!llmClient,
+      },
       workflow: {
         '1. Upload': 'POST /api/documents/upload - Upload and group PDF',
-        '2. Query': 'POST /api/query or POST /api/documents/:id/query - Query the document',
+        '2a. Query (Native)': 'POST /api/query - Query using native Magnify orchestrator',
+        '2b. Query (Pi-Mono)': 'POST /api/query-agents - Query using pi-mono multi-agent pipeline',
       },
       endpoints: {
         'POST /api/documents/upload': 'Upload PDF, returns document ID and groups',
@@ -57,9 +68,11 @@ export function createServer(config?: Partial<ServerConfig>): { app: Express; co
         'GET /api/documents/:id/groups': 'Get all groups for a document',
         'GET /api/documents/:id/groups/:groupId': 'Get specific group details',
         'DELETE /api/documents/:id': 'Delete a document',
-        'POST /api/query': 'Query any document (requires documentId in body)',
-        'POST /api/documents/:id/query': 'Query a specific document',
-        'GET /api/health': 'Health check',
+        'POST /api/query': 'Query any document (native Magnify)',
+        'POST /api/query-agents': 'Query using pi-mono multi-agent pipeline',
+        'POST /api/documents/:id/query': 'Query a specific document (native)',
+        'POST /api/documents/:id/query-agents': 'Query using pi-mono agents',
+        'GET /api/health': 'Health check with storage stats',
       },
     });
   });
@@ -75,14 +88,18 @@ export function createServer(config?: Partial<ServerConfig>): { app: Express; co
   return { app, context };
 }
 
-export function startServer(config?: Partial<ServerConfig>): { app: Express; server: ReturnType<Express['listen']> } {
+export async function startServer(config?: Partial<ServerConfig>): Promise<{ app: Express; server: ReturnType<Express['listen']> }> {
   const finalConfig = { ...defaultServerConfig, ...config };
-  const { app } = createServer(finalConfig);
+  const { app, context } = createServer(finalConfig);
 
-  const server = app.listen(finalConfig.port, finalConfig.host, () => {
-    console.log(`Magnify PDF Scraper API running at http://${finalConfig.host}:${finalConfig.port}`);
-    console.log(`LLM Provider: ${finalConfig.llm.provider}`);
+  // Initialize document store (load persisted documents)
+  await initializeAPIContext(context);
+
+  return new Promise((resolve) => {
+    const server = app.listen(finalConfig.port, finalConfig.host, () => {
+      console.log(`Magnify PDF Scraper API running at http://${finalConfig.host}:${finalConfig.port}`);
+      console.log(`LLM Provider: ${finalConfig.llm.provider}`);
+      resolve({ app, server });
+    });
   });
-
-  return { app, server };
 }

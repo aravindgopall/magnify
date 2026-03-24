@@ -1,1 +1,2 @@
-export { DocumentStore, createDocumentStore, type StoredDocument, type QueryContext } from './document-store.js';
+export { DocumentStore, createDocumentStore, type StoredDocument, type QueryContext, type DocumentStoreOptions } from './document-store.js';
+export { DocumentPersistence, createDocumentPersistence } from './persistence.js';

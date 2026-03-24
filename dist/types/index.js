@@ -2,7 +2,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.SubagentConfigSchema = exports.OutputFormatSchema = exports.GroupingStrategySchema = void 0;
 const zod_1 = require("zod");
-exports.GroupingStrategySchema = zod_1.z.enum(['fixed', 'heading', 'toc', 'hybrid']);
+exports.GroupingStrategySchema = zod_1.z.enum(['fixed', 'heading', 'toc', 'hybrid', 'range']);
 exports.OutputFormatSchema = zod_1.z.enum(['json', 'markdown', 'summary', 'search-index']);
 exports.SubagentConfigSchema = zod_1.z.object({
     id: zod_1.z.string(),

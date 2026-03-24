@@ -144,15 +144,19 @@ export function createRouter(context: APIContext): Router {
     });
   });
 
-  router.delete('/documents/:id', (req: Request, res: Response) => {
-    const { id } = req.params;
-    const deleted = context.documentStore.delete(id);
+  router.delete('/documents/:id', async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { id } = req.params;
+      const deleted = await context.documentStore.delete(id);
 
-    if (!deleted) {
-      return res.status(404).json({ error: 'Document not found' });
+      if (!deleted) {
+        return res.status(404).json({ error: 'Document not found' });
+      }
+
+      res.json({ message: 'Document deleted', documentId: id });
+    } catch (error) {
+      next(error);
     }
-
-    res.json({ message: 'Document deleted', documentId: id });
   });
 
   router.post('/query', async (req: Request, res: Response, next: NextFunction) => {
@@ -200,10 +204,12 @@ export function createRouter(context: APIContext): Router {
     }
   });
 
-  router.get('/health', (_req: Request, res: Response) => {
+  router.get('/health', async (_req: Request, res: Response) => {
+    const stats = await context.documentStore.getStats();
     res.json({
       status: 'healthy',
-      documentsStored: context.documentStore.list().length,
+      documentsStored: stats.documentCount,
+      persistence: stats.persistence,
       llmConfigured: !!context.llmClient,
     });
   });
@@ -220,4 +226,11 @@ export function createAPIContext(llmClient: LLMClient): APIContext {
     queryOrchestrator,
     llmClient,
   };
+}
+
+/**
+ * Initialize the API context by loading persisted documents
+ */
+export async function initializeAPIContext(context: APIContext): Promise<void> {
+  await context.documentStore.initialize();
 }

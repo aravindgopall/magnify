@@ -12,4 +12,8 @@ export interface APIConfig {
 }
 export declare function createRouter(context: APIContext): Router;
 export declare function createAPIContext(llmClient: LLMClient): APIContext;
+/**
+ * Initialize the API context by loading persisted documents
+ */
+export declare function initializeAPIContext(context: APIContext): Promise<void>;
 //# sourceMappingURL=routes.d.ts.map

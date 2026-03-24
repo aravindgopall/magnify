@@ -5,6 +5,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.createRouter = createRouter;
 exports.createAPIContext = createAPIContext;
+exports.initializeAPIContext = initializeAPIContext;
 const express_1 = __importDefault(require("express"));
 const index_js_1 = require("../store/index.js");
 const index_js_2 = require("../orchestrator/index.js");
@@ -118,13 +119,18 @@ function createRouter(context) {
             })),
         });
     });
-    router.delete('/documents/:id', (req, res) => {
-        const { id } = req.params;
-        const deleted = context.documentStore.delete(id);
-        if (!deleted) {
-            return res.status(404).json({ error: 'Document not found' });
+    router.delete('/documents/:id', async (req, res, next) => {
+        try {
+            const { id } = req.params;
+            const deleted = await context.documentStore.delete(id);
+            if (!deleted) {
+                return res.status(404).json({ error: 'Document not found' });
+            }
+            res.json({ message: 'Document deleted', documentId: id });
         }
-        res.json({ message: 'Document deleted', documentId: id });
+        catch (error) {
+            next(error);
+        }
     });
     router.post('/query', async (req, res, next) => {
         try {
@@ -165,10 +171,12 @@ function createRouter(context) {
             next(error);
         }
     });
-    router.get('/health', (_req, res) => {
+    router.get('/health', async (_req, res) => {
+        const stats = await context.documentStore.getStats();
         res.json({
             status: 'healthy',
-            documentsStored: context.documentStore.list().length,
+            documentsStored: stats.documentCount,
+            persistence: stats.persistence,
             llmConfigured: !!context.llmClient,
         });
     });
@@ -182,5 +190,11 @@ function createAPIContext(llmClient) {
         queryOrchestrator,
         llmClient,
     };
+}
+/**
+ * Initialize the API context by loading persisted documents
+ */
+async function initializeAPIContext(context) {
+    await context.documentStore.initialize();
 }
 //# sourceMappingURL=routes.js.map
