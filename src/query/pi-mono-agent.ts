@@ -51,18 +51,64 @@ export class PiMonoQueryAgent {
   }
 
   private buildMainSystemPrompt(): string {
-    return `You are an expert document analysis agent.
+    return `You are an expert document analysis and synthesis agent.
 
-Your role is to synthesize information from multiple document sections to provide accurate, comprehensive answers to user queries.
+Your role is to synthesize information from multiple document sections to provide accurate, well-formatted answers to user queries.
+
+IMPORTANT: The context provided to you is RAW TEXT extracted verbatim from document sections. You must:
+1. Read and understand the raw context
+2. Format your answer according to the specified extraction type
+3. Preserve all technical accuracy (numbers, codes, field names, specifications)
 
 Guidelines:
 - Base your answer ONLY on the provided context from document sections
+- Extract and synthesize the relevant information from raw context
 - If information is incomplete or uncertain, acknowledge this
-- Cite specific sections when referencing information
-- Organize your response logically with clear structure
+- Cite specific sections when referencing information (e.g., "According to Section X...")
 - If the provided context contains no relevant information, state this clearly
-- Be concise but thorough
-- Preserve technical accuracy - don't paraphrase numbers or technical terms`;
+- DO NOT add information not present in the context
+- Preserve exact technical terms, field names, codes, and specifications
+- When referencing tables or structured data, maintain accuracy`;
+  }
+
+  /**
+   * Get formatting instructions based on extraction type
+   */
+  private getFormatInstructions(extractionType?: 'summary' | 'entities' | 'full' | 'custom'): string {
+    switch (extractionType) {
+      case 'summary':
+        return `FORMAT YOUR ANSWER AS A SUMMARY:
+- Provide a concise overview (2-5 bullet points or short paragraphs)
+- Highlight the key points only
+- Be brief but informative
+- Cite section numbers where information comes from`;
+      
+      case 'entities':
+        return `FORMAT YOUR ANSWER AS AN ENTITY LIST:
+- Extract and list key entities (names, codes, field tags, identifiers, values)
+- Use structured format (bullet points or JSON-like)
+- Include context for each entity (what it represents)
+- Cite section numbers where each entity is found
+- Example format:
+  • Field Tag 18: Merchant VAT Registration (Section 3, pages 521-530)
+  • Field Tag 19: Customer VAT Number (Section 3, pages 521-530)`;
+      
+      case 'full':
+        return `FORMAT YOUR ANSWER WITH FULL DETAIL:
+- Provide comprehensive explanation with complete details
+- Organize into clear sections/paragraphs
+- Include all relevant specifications, definitions, and technical details
+- Explain relationships and context
+- Cite specific sections when referencing information
+- Use clear headings if appropriate`;
+      
+      default:
+        return `FORMAT YOUR ANSWER WITH BALANCED DETAIL:
+- Provide clear explanation with key details
+- Be thorough but not overwhelming
+- Organize logically
+- Cite sections when referencing specific information`;
+    }
   }
 
   /**
@@ -133,7 +179,11 @@ Guidelines:
 
     // Synthesize final answer using ALL relevant contexts
     console.log(`[PiMonoAgent] Starting synthesis with ${relevantResults.length} relevant contexts...`);
-    const synthesisResult = await this.synthesizeAnswer(config.query, relevantResults);
+    const synthesisResult = await this.synthesizeAnswer(
+      config.query, 
+      relevantResults, 
+      config.extractionType
+    );
     const answer = synthesisResult.answer;
     console.log(`[PiMonoAgent] ✓ Synthesis completed (${synthesisResult.durationMs}ms, answer length: ${answer.length})`);
 
@@ -237,7 +287,8 @@ Guidelines:
    */
   private async synthesizeAnswer(
     query: string,
-    relevantResults: SubAgentResult[]
+    relevantResults: SubAgentResult[],
+    extractionType?: 'summary' | 'entities' | 'full' | 'custom'
   ): Promise<{ answer: string; llmCallId?: string; durationMs: number }> {
     const startTime = Date.now();
     const logger = getPiMonoLogger();
@@ -249,14 +300,21 @@ Guidelines:
       })
       .join('\n---\n\n');
 
-    const synthesisPrompt = `Based on the following document sections, provide a comprehensive answer to the user's query.
+    // Build formatting instructions based on extraction type
+    const formatInstructions = this.getFormatInstructions(extractionType);
+
+    const synthesisPrompt = `Based on the following RAW document sections, synthesize an answer to the user's query.
 
 User Query: ${query}
 
-Relevant Document Sections:
+Extraction Type: ${extractionType || 'balanced'}
+
+${formatInstructions}
+
+Relevant Document Sections (RAW TEXT):
 ${contextSections}
 
-Provide a clear, well-structured answer. If you reference specific information, mention which section(s) it came from.`;
+Synthesize your answer according to the extraction type format. If you reference specific information, cite the section number.`;
 
     // Reset and prompt the main agent
     this.mainAgent.reset();

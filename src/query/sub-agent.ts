@@ -69,7 +69,7 @@ ${baseInstructions}
 Your task:
 1. Read the provided document section carefully
 2. Determine if it contains information RELATED to the user's query
-3. If relevant, extract all pertinent information including field specifications, technical details, and references
+3. If relevant, extract the relevant portions EXACTLY AS THEY APPEAR in the document
 4. If NOT relevant, respond with ONLY: "${RELEVANCE_MARKER}"
 
 Guidelines - When to mark as NOT RELEVANT:
@@ -86,26 +86,42 @@ Mark as RELEVANT if the section contains:
 - Examples, use cases, or context that helps understand the topic
 - Any substantive information that relates to the query topic
 
-Response Format:
+CRITICAL Response Format Rules:
 - If NOT relevant: respond with ONLY "${RELEVANCE_MARKER}" (nothing else)
-- If relevant: extract ALL information related to the query, including:
-  * Field names, specifications, and technical details
-  * Related concepts, terms, and references
-  * Context that helps understand the topic
-- Be INCLUSIVE - extract information even if it's technical or partial
-- Include table data, field definitions, and specifications`;
+- If relevant: Copy the relevant text EXACTLY as it appears in the document
+  * DO NOT reformat tables or restructure content
+  * DO NOT add headers, markdown formatting, or explanations
+  * DO NOT reorganize or interpret the information
+  * PRESERVE the original formatting, table structure, and text layout
+  * Extract complete paragraphs, tables, and sections that are relevant
+  * You may concatenate multiple relevant sections with "..." as separator
+
+Example:
+Query: "What is field tag 18?"
+Document: "Tag 18: Merchant Name, Length: 25 bytes, Format: AN..."
+
+CORRECT Response:
+"Tag 18: Merchant Name, Length: 25 bytes, Format: AN..."
+
+INCORRECT Response:
+"## Field Tag 18
+**Tag:** 18
+**Name:** Merchant Name
+**Length:** 25 bytes"
+
+Remember: Extract verbatim. The main agent will handle formatting.`;
   }
 
   private getExtractionInstructions(extractionType?: 'summary' | 'entities' | 'full' | 'custom'): string {
     switch (extractionType) {
       case 'summary':
-        return 'Extraction Mode: SUMMARY\nProvide a concise 2-3 sentence summary of the relevant information.';
+        return 'Extraction Mode: SUMMARY\nExtract relevant portions verbatim. Main agent will create summary.';
       case 'entities':
-        return 'Extraction Mode: ENTITIES\nExtract key entities: names, dates, numbers, codes, technical terms, and identifiers.';
+        return 'Extraction Mode: ENTITIES\nExtract relevant portions verbatim. Main agent will identify entities.';
       case 'full':
-        return 'Extraction Mode: FULL\nExtract all relevant information in complete detail, preserving exact wording and technical accuracy.';
+        return 'Extraction Mode: FULL\nExtract all relevant portions verbatim, preserving complete detail.';
       default:
-        return 'Extraction Mode: BALANCED\nExtract the most pertinent information (keep under 500 words).';
+        return 'Extraction Mode: BALANCED\nExtract relevant portions verbatim. Main agent will format appropriately.';
     }
   }
 
