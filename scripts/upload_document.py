@@ -9,12 +9,62 @@ import os
 import json
 import requests
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import time
 
 DEFAULT_MAGNIFY_URL = os.environ.get('MAGNIFY_URL', 'http://localhost:3000')
 
 
+def upload_with_strategy(pdf_path: str, strategy: str, magnify_url: str) -> dict:
+    """Upload a PDF with a specific grouping strategy"""
+    
+    file_name = Path(pdf_path).name
+    
+    print(f"🔄 [{strategy.upper()}] Starting upload...")
+    start_time = time.time()
+    
+    response = requests.post(
+        f"{magnify_url}/api/documents/upload",
+        json={
+            "source": pdf_path,
+            "fileName": file_name,
+            "groupingStrategy": strategy,
+            "parallelPages": True
+        },
+        timeout=1800
+    )
+    
+    duration = time.time() - start_time
+    
+    if response.status_code != 200:
+        print(f"❌ [{strategy.upper()}] Upload failed: {response.status_code}")
+        raise Exception(f"Upload failed for {strategy}: {response.text}")
+    
+    result = response.json()
+    print(f"✅ [{strategy.upper()}] Complete in {duration:.1f}s - {len(result['groups'])} groups")
+    
+    return result
+
+
+def merge_upload_results(fixed_result: dict, toc_result: dict, heading_result: dict) -> dict:
+    """Merge results from 3 strategy uploads into a combined result"""
+    
+    # Use fixed as base (since it's done first)
+    merged = fixed_result.copy()
+    
+    # Collect all groups from all strategies
+    all_groups = []
+    all_groups.extend(fixed_result.get('groups', []))
+    all_groups.extend(toc_result.get('groups', []))
+    all_groups.extend(heading_result.get('groups', []))
+    
+    merged['groups'] = all_groups
+    
+    return merged
+
+
 def upload_document(pdf_path: str, magnify_url: str = DEFAULT_MAGNIFY_URL) -> dict:
-    """Upload a PDF document to the Magnify server"""
+    """Upload a PDF document using all 3 strategies in parallel (fixed first, then toc+heading)"""
     
     if not os.path.exists(pdf_path):
         raise FileNotFoundError(f"PDF file not found: {pdf_path}")
@@ -24,40 +74,44 @@ def upload_document(pdf_path: str, magnify_url: str = DEFAULT_MAGNIFY_URL) -> di
     
     print(f"📄 Uploading: {file_name}")
     print(f"🌐 Server: {magnify_url}")
+    print(f"🚀 Strategy: Parallel uploads (fixed → toc+heading)")
+    print()
     
-    # Upload the document
-    response = requests.post(
-        f"{magnify_url}/api/documents/upload",
-        json={
-            "source": pdf_path,
-            "fileName": file_name,
-            "groupingStrategy": "hybrid",  # Use all grouping strategies
-            "parallelPages": True  # Process pages in parallel for speed
-        },
-        timeout=1800  # 30 minutes timeout for large PDFs
-    )
+    # Step 1: Upload with 'fixed' first (queryable immediately)
+    fixed_result = upload_with_strategy(pdf_path, "fixed", magnify_url)
     
-    if response.status_code != 200:
-        raise Exception(f"Upload failed: {response.status_code} - {response.text}")
+    # Step 2: Upload toc and heading in parallel
+    print()
+    print("🔄 Running TOC + Heading strategies in parallel...")
     
-    result = response.json()
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        toc_future = executor.submit(upload_with_strategy, pdf_path, "toc", magnify_url)
+        heading_future = executor.submit(upload_with_strategy, pdf_path, "heading", magnify_url)
+        
+        # Wait for both to complete
+        toc_result = toc_future.result()
+        heading_result = heading_future.result()
     
-    print(f"✅ Upload successful!")
-    print(f"📊 Document ID: {result['documentId']}")
-    print(f"📖 Pages: {result['metadata']['pageCount']}")
-    print(f"📚 Groups: {len(result['groups'])}")
+    # Merge all results
+    merged = merge_upload_results(fixed_result, toc_result, heading_result)
+    
+    print()
+    print(f"✅ All uploads complete!")
+    print(f"📊 Document ID: {fixed_result['documentId']}")
+    print(f"📖 Pages: {fixed_result['metadata']['pageCount']}")
+    print(f"📚 Total Groups: {len(merged['groups'])}")
     print(f"\nGroup Breakdown:")
     
     # Count groups by strategy
     group_types = {}
-    for group in result['groups']:
+    for group in merged['groups']:
         gtype = group.get('type', 'unknown')
         group_types[gtype] = group_types.get(gtype, 0) + 1
     
-    for gtype, count in group_types.items():
+    for gtype, count in sorted(group_types.items()):
         print(f"  - {gtype}: {count} groups")
     
-    return result
+    return merged
 
 
 def list_documents(magnify_url: str = DEFAULT_MAGNIFY_URL) -> list:
@@ -108,12 +162,14 @@ def main():
             print()
             print("🎯 Next Steps:")
             print("  1. Query using pi-mono:")
-            print(f'     pi "Query document {result["documentId"]}: What is the main topic?"')
+            print(f'     pi "Query document: What is the main topic?"')
             print()
             print("  2. Or use the Magnify API directly:")
-            print(f'     curl -X POST {magnify_url}/api/query \\')
+            print(f'     curl -X POST {magnify_url}/api/query-agents \\')
             print(f'       -H "Content-Type: application/json" \\')
-            print(f'       -d \'{{"documentId": "{result["documentId"]}", "query": "your question"}}\'')
+            print(f'       -d \'{{"documentId": "<doc-id>", "query": "your question", "extractionType": "summary"}}\'')
+            print()
+            print(f"  💡 Document was queryable after {result.get('metadata', {}).get('pageCount', 0)} seconds (fixed strategy)")
         except Exception as e:
             print(f"❌ Error: {e}", file=sys.stderr)
             sys.exit(1)

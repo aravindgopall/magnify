@@ -53,6 +53,10 @@ export declare class QueryOrchestrator {
      * Complete LLM call log after response
      */
     private completeLLMCall;
+    /**
+     * Generate a filename-safe slug from query text
+     */
+    private generateQuerySlug;
     execute(request: QueryRequest): Promise<QueryResponse>;
     private identifyRelevantGroups;
     private executeSubagent;

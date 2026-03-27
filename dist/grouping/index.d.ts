@@ -1,2 +1,2 @@
-export { GroupingStrategyFactory, groupingFactory, FixedPageGrouper, HeadingGrouper, TOCGrouper, HybridGrouper, LLMGrouper, type GroupingStrategyHandler, } from './strategies.js';
+export { GroupingStrategyFactory, groupingFactory, FixedPageGrouper, HeadingGrouper, TOCGrouper, LLMGrouper, type GroupingStrategyHandler, } from './strategies.js';
 //# sourceMappingURL=index.d.ts.map

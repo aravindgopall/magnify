@@ -259,11 +259,13 @@ export class LiteLLMClient extends LLMClient {
 
 export function createLLMClient(config: LLMClientConfig & { provider?: 'openai' | 'litellm' | 'mock' }): LLMClient {
   const provider = config.provider || 'mock';
+  console.log(`[LLM] Creating LLM client with provider: ${provider}`);
   
   if (provider === 'openai') {
     if (!config.apiKey) {
       throw new Error('OpenAI API key is required for OpenAI provider');
     }
+    console.log('[LLM] Initializing OpenAI client');
     return new OpenAIClient({ ...config, apiKey: config.apiKey });
   }
   
@@ -274,8 +276,10 @@ export function createLLMClient(config: LLMClientConfig & { provider?: 'openai' 
     if (!config.baseURL) {
       throw new Error('LiteLLM URL is required for LiteLLM provider');
     }
+    console.log(`[LLM] Initializing LiteLLM client - Model: ${config.model}, URL: ${config.baseURL}`);
     return new LiteLLMClient({ ...config, apiKey: config.apiKey, baseURL: config.baseURL });
   }
   
+  console.log('[LLM] Falling back to MockLLMClient');
   return new MockLLMClient(config);
 }

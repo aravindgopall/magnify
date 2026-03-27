@@ -1,3 +1,8 @@
+import { fileURLToPath } from 'url';
+import { dirname } from 'path';
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+
 import { spawn } from 'child_process';
 import path from 'path';
 import { v4 as uuidv4 } from 'uuid';
@@ -24,6 +29,12 @@ export interface ParserOptions {
   usePythonExtractor?: boolean;
   pythonScriptPath?: string;
   outputDir?: string;
+  groupingStrategy?: 'toc' | 'heading' | 'fixed' | 'hybrid' | 'all';
+  // Performance optimization flags
+  skipTables?: boolean;      // Skip table extraction (5-10x faster)
+  skipImages?: boolean;      // Skip image extraction
+  skipOCR?: boolean;         // Skip OCR for scanned PDFs (3-5x faster)
+  skipFontInfo?: boolean;    // Skip detailed font metadata
 }
 
 export class PDFParser {
@@ -92,8 +103,37 @@ export class PDFParser {
       path.join(__dirname, '../../scripts/pdf_extractor.py');
     
     const args = [scriptPath, pdfPath];
+    
+    // Add output directory if specified
     if (this.options.outputDir) {
-      args.push(this.options.outputDir);
+      args.push('--output-dir', this.options.outputDir);
+    }
+    
+    // Add grouping strategy if specified
+    if (this.options.groupingStrategy) {
+      args.push('--strategy', this.options.groupingStrategy);
+      console.log(`[PDFParser] Using grouping strategy: ${this.options.groupingStrategy}`);
+    }
+    
+    // Add performance optimization flags
+    if (this.options.skipTables) {
+      args.push('--skip-tables');
+      console.log('[PDFParser] Skipping table extraction for performance');
+    }
+    
+    if (this.options.skipImages) {
+      args.push('--skip-images');
+      console.log('[PDFParser] Skipping image extraction for performance');
+    }
+    
+    if (this.options.skipOCR) {
+      args.push('--skip-ocr');
+      console.log('[PDFParser] Skipping OCR for performance');
+    }
+    
+    if (this.options.skipFontInfo) {
+      args.push('--no-font-info');
+      console.log('[PDFParser] Skipping font metadata for performance');
     }
 
     return new Promise((resolve, reject) => {

@@ -82,7 +82,7 @@ Respond with a JSON object containing:
 
     for (const identifiedGroup of analysis.groups) {
       const startPage = Math.max(1, identifiedGroup.startPage);
-      const endPage = Math.min(document.pages.length, identifiedGroup.endPage);
+      const endPage = Math.max(startPage, Math.min(document.pages.length, identifiedGroup.endPage));
       
       const groupPages = document.pages.slice(startPage - 1, endPage);
 

@@ -7,6 +7,11 @@ export interface ParserOptions {
     usePythonExtractor?: boolean;
     pythonScriptPath?: string;
     outputDir?: string;
+    groupingStrategy?: 'toc' | 'heading' | 'fixed' | 'hybrid' | 'all';
+    skipTables?: boolean;
+    skipImages?: boolean;
+    skipOCR?: boolean;
+    skipFontInfo?: boolean;
 }
 export declare class PDFParser {
     private options;

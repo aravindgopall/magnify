@@ -114,9 +114,23 @@ class ExtractionResult:
 
 
 class PDFExtractor:
-    def __init__(self, output_dir: Optional[str] = None, save_images: bool = True):
+    def __init__(self, output_dir: Optional[str] = None, save_images: bool = True, 
+                 skip_tables: bool = False, skip_ocr: bool = False, extract_font_info: bool = True):
+        """
+        Initialize PDF extractor with performance options.
+        
+        Args:
+            output_dir: Directory to save extracted data
+            save_images: Whether to extract and save images (slow)
+            skip_tables: Skip table extraction (MAJOR speedup - 5-10x faster per page)
+            skip_ocr: Skip OCR for scanned pages (3-5x faster for scanned PDFs)
+            extract_font_info: Extract detailed font metadata (adds ~0.5s per page)
+        """
         self.output_dir = output_dir or tempfile.mkdtemp()
         self.save_images = save_images
+        self.skip_tables = skip_tables
+        self.skip_ocr = skip_ocr
+        self.extract_font_info = extract_font_info
         self.images_dir = os.path.join(self.output_dir, "images")
         if self.save_images:
             os.makedirs(self.images_dir, exist_ok=True)
@@ -286,15 +300,17 @@ class PDFExtractor:
         # Extract text
         text = page.get_text()
         
-        # Extract text blocks with font info
-        text_blocks = self.extract_text_blocks(page)
+        # Extract text blocks with font info (optional for performance)
+        text_blocks = self.extract_text_blocks(page) if self.extract_font_info else []
         
-        # Extract tables (camelot first, pdfplumber fallback)
-        tables = self.extract_tables_camelot(pdf_path, page_number)
-        if not tables:
-            tables = self.extract_tables_pdfplumber(pdf_path, page_number)
+        # Extract tables (SLOW - skip if not needed)
+        tables = []
+        if not self.skip_tables:
+            tables = self.extract_tables_camelot(pdf_path, page_number)
+            if not tables:
+                tables = self.extract_tables_pdfplumber(pdf_path, page_number)
         
-        # Extract images
+        # Extract images (optional for performance)
         images = self.extract_images(page, page_number, doc_id) if self.save_images else []
         
         # Get page dimensions
@@ -317,6 +333,18 @@ class PDFExtractor:
         tables = []
         images = []
         width, height = 612, 792  # Default letter size
+        
+        # Skip OCR if disabled (MAJOR speedup for scanned PDFs)
+        if self.skip_ocr:
+            return PageObject(
+                page_number=page_number,
+                text="[OCR skipped for performance]",
+                text_blocks=[],
+                tables=[],
+                images=[],
+                width=width,
+                height=height
+            )
         
         # Convert page to image
         if PDF2IMAGE_AVAILABLE and PYTESSERACT_AVAILABLE:
@@ -357,9 +385,10 @@ class PDFExtractor:
                             }
                         })
                     
-                    # Try table detection with pdfplumber
-                    tables = self.extract_tables_pdfplumber(pdf_path, page_number)
-                    tables = [asdict(t) for t in tables]
+                    # Try table detection with pdfplumber (optional)
+                    if not self.skip_tables:
+                        tables = self.extract_tables_pdfplumber(pdf_path, page_number)
+                        tables = [asdict(t) for t in tables]
                     
             except Exception as e:
                 print(f"OCR error on page {page_number}: {e}", file=sys.stderr)
@@ -397,14 +426,42 @@ class PDFExtractor:
         for i, item in enumerate(toc):
             level, title, start_page = item[0], item[1], item[2]
             
-            # Find end page (start of next item - 1)
-            if i < len(toc) - 1:
-                end_page = toc[i + 1][2] - 1
-            else:
-                end_page = len(pages)
+            # Skip empty or whitespace-only titles
+            if not title or not title.strip():
+                continue
+            
+            title = title.strip()
+            
+            # Skip very short titles (likely noise)
+            if len(title) < 3:
+                continue
+            
+            # Find end page (start of next valid item with different page - 1)
+            end_page = len(pages)  # Default to last page
+            for j in range(i + 1, len(toc)):
+                next_level, next_title, next_page = toc[j][0], toc[j][1], toc[j][2]
+                # Skip invalid entries
+                if not next_title or not next_title.strip() or len(next_title.strip()) < 3:
+                    continue
+                # Only use entries on a DIFFERENT page
+                if next_page > start_page:
+                    end_page = next_page - 1
+                    break
+            
+            # Ensure valid page range
+            if end_page < start_page:
+                end_page = start_page
+            
+            # Ensure pages are within bounds
+            start_page = max(1, min(start_page, len(pages)))
+            end_page = max(start_page, min(end_page, len(pages)))
             
             # Gather pages for this group
             group_pages = [p for p in pages if start_page <= p.page_number <= end_page]
+            
+            # Skip if no pages found
+            if not group_pages:
+                continue
             
             groups.append(GroupObject(
                 group_id=str(uuid.uuid4()),
@@ -418,21 +475,75 @@ class PDFExtractor:
                 image_paths=[img.get("file_path", "") for p in group_pages for img in p.images if img.get("file_path")]
             ))
         
-        return groups
+        # Post-process: Merge consecutive groups with same page range (multiple TOC entries on same page)
+        merged_groups = []
+        current_group = None
+        
+        for group in groups:
+            if current_group is None:
+                current_group = group
+            elif (current_group.start_page == group.start_page and 
+                  current_group.end_page == group.end_page):
+                # Same page range - merge titles
+                current_group.title = f"{current_group.title} / {group.title}"
+            else:
+                merged_groups.append(current_group)
+                current_group = group
+        
+        if current_group is not None:
+            merged_groups.append(current_group)
+        
+        return merged_groups if merged_groups else groups
     
     def build_heading_groups(self, pages: List[PageObject], doc_id: str) -> List[GroupObject]:
         """Build groups based on detected headings (bold or large font)."""
         groups = []
-        headings = []  # List of (page_number, title)
+        headings = []  # List of (page_number, title, font_size)
+        
+        # Noise words and symbols to filter out
+        noise_words = {'the', 'a', 'an', 'to', 'of', 'and', 'or', 'in', 'on', 'at', 'for', 'with'}
+        noise_symbols = {'→', '•', '-', '>', '<', '|', '/', '\\'}
         
         # Find all headings
         for page in pages:
             for block in page.text_blocks:
-                # Heading criteria: bold OR font_size >= 14
-                if block.get("is_bold") or block.get("font_size", 0) >= 14:
-                    text = block.get("text", "").strip()
-                    if text and len(text) < 100:  # Headings are usually short
-                        headings.append((page.page_number, text))
+                text = block.get("text", "").strip()
+                font_size = block.get("font_size", 0)
+                is_bold = block.get("is_bold", False)
+                
+                # Skip empty text
+                if not text:
+                    continue
+                
+                # Stricter heading criteria: bold AND font_size >= 12, OR font_size >= 16
+                is_heading = (is_bold and font_size >= 12) or font_size >= 16
+                
+                if is_heading and len(text) < 100:  # Headings are usually short
+                    # Filter out noise
+                    text_lower = text.lower()
+                    
+                    # Skip if too short
+                    if len(text) < 3:
+                        continue
+                    
+                    # Skip if single word and it's a noise word
+                    words = text.split()
+                    if len(words) == 1 and text_lower in noise_words:
+                        continue
+                    
+                    # Skip if it's just a symbol
+                    if text in noise_symbols:
+                        continue
+                    
+                    # Skip if it's only punctuation/symbols
+                    if all(not c.isalnum() for c in text):
+                        continue
+                    
+                    # Skip if it looks like a page number or date
+                    if text.isdigit() or (len(text) <= 5 and any(c.isdigit() for c in text)):
+                        continue
+                    
+                    headings.append((page.page_number, text, font_size))
         
         if not headings:
             # Create single "Full Document" group
@@ -449,16 +560,44 @@ class PDFExtractor:
             ))
             return groups
         
+        # Remove duplicate headings on same page (keep larger font)
+        filtered_headings = []
+        seen_on_page = {}
+        for page_num, title, font_size in headings:
+            key = (page_num, title)
+            if key not in seen_on_page or font_size > seen_on_page[key]:
+                seen_on_page[key] = font_size
+                filtered_headings.append((page_num, title))
+        
+        # Remove exact duplicates
+        filtered_headings = list(dict.fromkeys(filtered_headings))
+        
+        # Sort by page number
+        filtered_headings.sort(key=lambda x: x[0])
+        
         # Build groups from headings
-        for i, (page_num, title) in enumerate(headings):
-            # Find end page
-            if i < len(headings) - 1:
-                end_page = headings[i + 1][0] - 1
-            else:
-                end_page = len(pages)
+        for i, (page_num, title) in enumerate(filtered_headings):
+            # Find end page (next heading's page - 1, or last page)
+            end_page = len(pages)
+            if i < len(filtered_headings) - 1:
+                next_page = filtered_headings[i + 1][0]
+                # If next heading is on a DIFFERENT page, end before it starts
+                if next_page > page_num:
+                    end_page = next_page - 1
+                else:
+                    # Next heading is on the SAME page - this group should only span current page
+                    end_page = page_num
+            
+            # Ensure valid page range
+            if end_page < page_num:
+                end_page = page_num
             
             # Gather pages for this group
             group_pages = [p for p in pages if page_num <= p.page_number <= end_page]
+            
+            # Skip if no pages found
+            if not group_pages:
+                continue
             
             groups.append(GroupObject(
                 group_id=str(uuid.uuid4()),
@@ -472,7 +611,25 @@ class PDFExtractor:
                 image_paths=[img.get("file_path", "") for p in group_pages for img in p.images if img.get("file_path")]
             ))
         
-        return groups
+        # Post-process: Merge consecutive groups with same page range (multiple headings on same page)
+        merged_groups = []
+        current_group = None
+        
+        for group in groups:
+            if current_group is None:
+                current_group = group
+            elif (current_group.start_page == group.start_page and 
+                  current_group.end_page == group.end_page):
+                # Same page range - merge titles
+                current_group.title = f"{current_group.title} / {group.title}"
+            else:
+                merged_groups.append(current_group)
+                current_group = group
+        
+        if current_group is not None:
+            merged_groups.append(current_group)
+        
+        return merged_groups if merged_groups else groups
     
     def build_fixed_groups(self, pages: List[PageObject], doc_id: str, pages_per_group: int = 10) -> List[GroupObject]:
         """Build fixed range groups (always runs)."""
@@ -499,8 +656,14 @@ class PDFExtractor:
         
         return groups
     
-    def extract(self, pdf_path: str) -> ExtractionResult:
-        """Main extraction pipeline."""
+    def extract(self, pdf_path: str, strategy: Optional[str] = None) -> ExtractionResult:
+        """
+        Main extraction pipeline.
+        
+        Args:
+            pdf_path: Path to the PDF file
+            strategy: Grouping strategy - 'toc', 'heading', 'fixed', or None for all strategies
+        """
         doc_id = str(uuid.uuid4())
         
         # Step 1: Detect PDF type
@@ -529,20 +692,52 @@ class PDFExtractor:
             
             pages.append(page_obj)
         
-        # Step 3: Build all 3 grouping strategies
+        # Step 3: Build grouping strategies based on parameter
         all_groups = []
         
-        # TOC groups
-        toc_groups = self.build_toc_groups(doc, pages, doc_id)
-        all_groups.extend(toc_groups)
-        
-        # Heading groups
-        heading_groups = self.build_heading_groups(pages, doc_id)
-        all_groups.extend(heading_groups)
-        
-        # Fixed range groups
-        fixed_groups = self.build_fixed_groups(pages, doc_id)
-        all_groups.extend(fixed_groups)
+        if strategy is None or strategy == 'hybrid' or strategy == 'all':
+            # Build all 3 strategies (legacy behavior)
+            print(f"Building all grouping strategies", file=sys.stderr)
+            
+            # TOC groups
+            toc_groups = self.build_toc_groups(doc, pages, doc_id)
+            all_groups.extend(toc_groups)
+            
+            # Heading groups
+            heading_groups = self.build_heading_groups(pages, doc_id)
+            all_groups.extend(heading_groups)
+            
+            # Fixed range groups
+            fixed_groups = self.build_fixed_groups(pages, doc_id)
+            all_groups.extend(fixed_groups)
+            
+        elif strategy == 'toc':
+            # Only build TOC groups
+            print(f"Building TOC grouping strategy only", file=sys.stderr)
+            toc_groups = self.build_toc_groups(doc, pages, doc_id)
+            all_groups.extend(toc_groups)
+            
+        elif strategy == 'heading':
+            # Only build heading groups
+            print(f"Building Heading grouping strategy only", file=sys.stderr)
+            heading_groups = self.build_heading_groups(pages, doc_id)
+            all_groups.extend(heading_groups)
+            
+        elif strategy == 'fixed':
+            # Only build fixed groups
+            print(f"Building Fixed grouping strategy only", file=sys.stderr)
+            fixed_groups = self.build_fixed_groups(pages, doc_id)
+            all_groups.extend(fixed_groups)
+            
+        else:
+            # Unknown strategy, build all (fallback)
+            print(f"Unknown strategy '{strategy}', building all strategies", file=sys.stderr)
+            toc_groups = self.build_toc_groups(doc, pages, doc_id)
+            all_groups.extend(toc_groups)
+            heading_groups = self.build_heading_groups(pages, doc_id)
+            all_groups.extend(heading_groups)
+            fixed_groups = self.build_fixed_groups(pages, doc_id)
+            all_groups.extend(fixed_groups)
         
         # Get metadata
         metadata = {
@@ -578,21 +773,41 @@ class PDFExtractor:
 
 
 def main():
-    if len(sys.argv) < 2:
-        print("Usage: python pdf_extractor.py <pdf_path> [output_dir]", file=sys.stderr)
+    import argparse
+    
+    parser = argparse.ArgumentParser(description='Extract content from PDF files')
+    parser.add_argument('pdf_path', help='Path to PDF file')
+    parser.add_argument('--output-dir', help='Output directory for extracted data')
+    parser.add_argument('--strategy', 
+                       choices=['toc', 'heading', 'fixed', 'hybrid', 'all'],
+                       help='Grouping strategy: toc, heading, fixed, hybrid (all strategies), or all (same as hybrid)')
+    parser.add_argument('--skip-tables', action='store_true',
+                       help='Skip table extraction (MAJOR speedup - 5-10x faster)')
+    parser.add_argument('--skip-images', action='store_true',
+                       help='Skip image extraction and saving')
+    parser.add_argument('--skip-ocr', action='store_true',
+                       help='Skip OCR for scanned pages (3-5x faster for scanned PDFs)')
+    parser.add_argument('--no-font-info', action='store_true',
+                       help='Skip detailed font metadata extraction')
+    
+    args = parser.parse_args()
+    
+    if not os.path.exists(args.pdf_path):
+        print(f"Error: File not found: {args.pdf_path}", file=sys.stderr)
         sys.exit(1)
     
-    pdf_path = sys.argv[1]
-    output_dir = sys.argv[2] if len(sys.argv) > 2 else None
-    
-    if not os.path.exists(pdf_path):
-        print(f"Error: File not found: {pdf_path}", file=sys.stderr)
-        sys.exit(1)
-    
-    extractor = PDFExtractor(output_dir=output_dir)
+    # Create extractor with performance options
+    extractor = PDFExtractor(
+        output_dir=args.output_dir,
+        save_images=not args.skip_images,
+        skip_tables=args.skip_tables,
+        skip_ocr=args.skip_ocr,
+        extract_font_info=not args.no_font_info
+    )
     
     try:
-        result = extractor.extract(pdf_path)
+        print(f"Extracting PDF with options: tables={not args.skip_tables}, images={not args.skip_images}, ocr={not args.skip_ocr}", file=sys.stderr)
+        result = extractor.extract(args.pdf_path, strategy=args.strategy)
         print(json.dumps(asdict(result), indent=2))
     except Exception as e:
         print(f"Error: {e}", file=sys.stderr)

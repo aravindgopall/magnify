@@ -1,5 +1,5 @@
 import { z } from 'zod';
-export declare const GroupingStrategySchema: z.ZodEnum<["fixed", "heading", "toc", "hybrid", "range"]>;
+export declare const GroupingStrategySchema: z.ZodEnum<["fixed", "heading", "toc"]>;
 export type GroupingStrategy = z.infer<typeof GroupingStrategySchema>;
 export declare const OutputFormatSchema: z.ZodEnum<["json", "markdown", "summary", "search-index"]>;
 export type OutputFormat = z.infer<typeof OutputFormatSchema>;

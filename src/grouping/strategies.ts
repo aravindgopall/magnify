@@ -52,7 +52,7 @@ export class LLMGrouper implements GroupingStrategyHandler {
 
   async group(document: PDFDocument, config: GroupingConfig): Promise<DocumentGroup[]> {
     const mainAgent = new MainAgent(this.llmClient);
-    return mainAgent.identifyGroups(document, config.strategy === 'hybrid' ? undefined : config.strategy);
+    return mainAgent.identifyGroups(document, config.strategy);
   }
 }
 
@@ -78,7 +78,12 @@ export class HeadingGrouper implements GroupingStrategyHandler {
       const nextHeading = headings[i + 1];
       
       const startPage = currentHeading.pageNumber;
-      const endPage = nextHeading ? nextHeading.pageNumber - 1 : pages.length;
+      let endPage = nextHeading ? nextHeading.pageNumber - 1 : pages.length;
+      
+      // Fix: Ensure endPage is not before startPage (handles multiple headings on same page)
+      if (endPage < startPage) {
+        endPage = startPage;
+      }
       
       if (endPage - startPage + 1 < minGroupSize && i < headings.length - 1) {
         continue;
@@ -175,7 +180,12 @@ export class TOCGrouper implements GroupingStrategyHandler {
       const nextItem = flatItems[i + 1];
       
       const startPage = currentItem.pageNumber;
-      const endPage = nextItem ? nextItem.pageNumber - 1 : pages.length;
+      let endPage = nextItem ? nextItem.pageNumber - 1 : pages.length;
+      
+      // Ensure endPage is not before startPage
+      if (endPage < startPage) {
+        endPage = startPage;
+      }
       
       const groupPages = pages.slice(startPage - 1, endPage);
 
@@ -210,45 +220,6 @@ export class TOCGrouper implements GroupingStrategyHandler {
   }
 }
 
-export class HybridGrouper implements GroupingStrategyHandler {
-  private tocGrouper = new TOCGrouper();
-  private headingGrouper = new HeadingGrouper();
-  private fixedGrouper = new FixedPageGrouper();
-
-  async group(document: PDFDocument, config: GroupingConfig): Promise<DocumentGroup[]> {
-    if (document.toc && document.toc.items.length > 0) {
-      const groups = await this.tocGrouper.group(document, config);
-      if (groups.length > 0) {
-        return groups;
-      }
-    }
-
-    const headings = this.hasHeadings(document);
-    if (headings) {
-      const groups = await this.headingGrouper.group(document, config);
-      if (groups.length > 0) {
-        return groups;
-      }
-    }
-
-    return this.fixedGrouper.group(document, {
-      ...config,
-      strategy: 'fixed',
-    });
-  }
-
-  private hasHeadings(document: PDFDocument): boolean {
-    for (const page of document.pages) {
-      for (const element of page.elements) {
-        if (element.type === 'heading') {
-          return true;
-        }
-      }
-    }
-    return false;
-  }
-}
-
 export class GroupingStrategyFactory {
   private llmClient?: LLMClient;
 
@@ -257,10 +228,6 @@ export class GroupingStrategyFactory {
   }
 
   getHandler(strategy: GroupingStrategy): GroupingStrategyHandler {
-    if (strategy !== 'fixed' && this.llmClient) {
-      return new LLMGrouper(this.llmClient);
-    }
-
     switch (strategy) {
       case 'fixed':
         return new FixedPageGrouper();
@@ -268,8 +235,6 @@ export class GroupingStrategyFactory {
         return new HeadingGrouper();
       case 'toc':
         return new TOCGrouper();
-      case 'hybrid':
-        return new HybridGrouper();
       default:
         return new FixedPageGrouper();
     }

@@ -1,10 +1,5 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.QueryOrchestrator = void 0;
-exports.createQueryOrchestrator = createQueryOrchestrator;
-const uuid_1 = require("uuid");
-const query_log_js_1 = require("../store/query-log.js");
-class QueryOrchestrator {
+import { createQueryLogPersistence } from '../store/query-log.js';
+export class QueryOrchestrator {
     llmClient;
     documentStore;
     maxConcurrentRequests = 3; // Limit to avoid rate limiting
@@ -12,7 +7,7 @@ class QueryOrchestrator {
     constructor(llmClient, documentStore) {
         this.llmClient = llmClient;
         this.documentStore = documentStore;
-        this.queryLogPersistence = (0, query_log_js_1.createQueryLogPersistence)();
+        this.queryLogPersistence = createQueryLogPersistence();
     }
     /**
      * Process items in batches to avoid rate limiting
@@ -67,9 +62,42 @@ class QueryOrchestrator {
         console.log('============================================================\n');
         return log;
     }
+    /**
+     * Generate a filename-safe slug from query text
+     */
+    generateQuerySlug(query) {
+        // Remove special characters and convert to lowercase
+        let slug = query
+            .toLowerCase()
+            .replace(/[^a-z0-9\s-]/g, '')
+            .trim();
+        // Extract meaningful words (skip common words)
+        const stopWords = new Set([
+            'what', 'is', 'are', 'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at',
+            'to', 'for', 'of', 'with', 'by', 'from', 'as', 'can', 'you', 'me', 'i',
+            'tell', 'show', 'explain', 'describe', 'how', 'does', 'do', 'will', 'would'
+        ]);
+        const words = slug
+            .split(/\s+/)
+            .filter(word => word.length > 2 && !stopWords.has(word))
+            .slice(0, 5); // Keep first 5 meaningful words
+        // Join with underscores
+        slug = words.join('_');
+        // Fallback if slug is empty
+        if (!slug || slug.length < 3) {
+            slug = 'query';
+        }
+        // Limit length to 50 characters
+        if (slug.length > 50) {
+            slug = slug.substring(0, 50);
+        }
+        return slug;
+    }
     async execute(request) {
         const startTime = Date.now();
-        const queryId = (0, uuid_1.v4)();
+        const timestamp = Date.now();
+        const querySlug = this.generateQuerySlug(request.query);
+        const queryId = `${querySlug}_${timestamp}`;
         const llmCalls = [];
         const stored = this.documentStore.get(request.documentId);
         if (!stored) {
@@ -394,8 +422,7 @@ Synthesize these into a comprehensive answer:`,
         return this.queryLogPersistence;
     }
 }
-exports.QueryOrchestrator = QueryOrchestrator;
-function createQueryOrchestrator(llmClient, documentStore) {
+export function createQueryOrchestrator(llmClient, documentStore) {
     return new QueryOrchestrator(llmClient, documentStore);
 }
 //# sourceMappingURL=query-orchestrator.js.map

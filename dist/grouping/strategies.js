@@ -1,9 +1,6 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.groupingFactory = exports.GroupingStrategyFactory = exports.HybridGrouper = exports.TOCGrouper = exports.HeadingGrouper = exports.LLMGrouper = exports.FixedPageGrouper = void 0;
-const uuid_1 = require("uuid");
-const main_agent_js_1 = require("../llm/main-agent.js");
-class FixedPageGrouper {
+import { v4 as uuidv4 } from 'uuid';
+import { MainAgent } from '../llm/main-agent.js';
+export class FixedPageGrouper {
     async group(document, config) {
         const pagesPerGroup = config.fixedPagesPerGroup || 10;
         const pages = document.pages;
@@ -13,7 +10,7 @@ class FixedPageGrouper {
             const startPage = i + 1;
             const endPage = Math.min(i + pagesPerGroup, pages.length);
             groups.push({
-                id: (0, uuid_1.v4)(),
+                id: uuidv4(),
                 type: 'fixed',
                 title: `Pages ${startPage}-${endPage}`,
                 startPage,
@@ -27,19 +24,17 @@ class FixedPageGrouper {
         return groups;
     }
 }
-exports.FixedPageGrouper = FixedPageGrouper;
-class LLMGrouper {
+export class LLMGrouper {
     llmClient;
     constructor(llmClient) {
         this.llmClient = llmClient;
     }
     async group(document, config) {
-        const mainAgent = new main_agent_js_1.MainAgent(this.llmClient);
-        return mainAgent.identifyGroups(document, config.strategy === 'hybrid' ? undefined : config.strategy);
+        const mainAgent = new MainAgent(this.llmClient);
+        return mainAgent.identifyGroups(document, config.strategy);
     }
 }
-exports.LLMGrouper = LLMGrouper;
-class HeadingGrouper {
+export class HeadingGrouper {
     async group(document, config) {
         const pages = document.pages;
         const headingLevels = config.headingLevels || [1, 2];
@@ -56,13 +51,17 @@ class HeadingGrouper {
             const currentHeading = headings[i];
             const nextHeading = headings[i + 1];
             const startPage = currentHeading.pageNumber;
-            const endPage = nextHeading ? nextHeading.pageNumber - 1 : pages.length;
+            let endPage = nextHeading ? nextHeading.pageNumber - 1 : pages.length;
+            // Fix: Ensure endPage is not before startPage (handles multiple headings on same page)
+            if (endPage < startPage) {
+                endPage = startPage;
+            }
             if (endPage - startPage + 1 < minGroupSize && i < headings.length - 1) {
                 continue;
             }
             const groupPages = pages.slice(startPage - 1, endPage);
             groups.push({
-                id: (0, uuid_1.v4)(),
+                id: uuidv4(),
                 type: 'heading',
                 title: currentHeading.text,
                 startPage,
@@ -120,8 +119,7 @@ class HeadingGrouper {
         return merged;
     }
 }
-exports.HeadingGrouper = HeadingGrouper;
-class TOCGrouper {
+export class TOCGrouper {
     async group(document, config) {
         const toc = document.toc;
         if (!toc || toc.items.length === 0) {
@@ -137,10 +135,14 @@ class TOCGrouper {
             const currentItem = flatItems[i];
             const nextItem = flatItems[i + 1];
             const startPage = currentItem.pageNumber;
-            const endPage = nextItem ? nextItem.pageNumber - 1 : pages.length;
+            let endPage = nextItem ? nextItem.pageNumber - 1 : pages.length;
+            // Ensure endPage is not before startPage
+            if (endPage < startPage) {
+                endPage = startPage;
+            }
             const groupPages = pages.slice(startPage - 1, endPage);
             groups.push({
-                id: (0, uuid_1.v4)(),
+                id: uuidv4(),
                 type: 'toc',
                 title: currentItem.title,
                 startPage,
@@ -165,51 +167,12 @@ class TOCGrouper {
         return flat;
     }
 }
-exports.TOCGrouper = TOCGrouper;
-class HybridGrouper {
-    tocGrouper = new TOCGrouper();
-    headingGrouper = new HeadingGrouper();
-    fixedGrouper = new FixedPageGrouper();
-    async group(document, config) {
-        if (document.toc && document.toc.items.length > 0) {
-            const groups = await this.tocGrouper.group(document, config);
-            if (groups.length > 0) {
-                return groups;
-            }
-        }
-        const headings = this.hasHeadings(document);
-        if (headings) {
-            const groups = await this.headingGrouper.group(document, config);
-            if (groups.length > 0) {
-                return groups;
-            }
-        }
-        return this.fixedGrouper.group(document, {
-            ...config,
-            strategy: 'fixed',
-        });
-    }
-    hasHeadings(document) {
-        for (const page of document.pages) {
-            for (const element of page.elements) {
-                if (element.type === 'heading') {
-                    return true;
-                }
-            }
-        }
-        return false;
-    }
-}
-exports.HybridGrouper = HybridGrouper;
-class GroupingStrategyFactory {
+export class GroupingStrategyFactory {
     llmClient;
     setLLMClient(client) {
         this.llmClient = client;
     }
     getHandler(strategy) {
-        if (strategy !== 'fixed' && this.llmClient) {
-            return new LLMGrouper(this.llmClient);
-        }
         switch (strategy) {
             case 'fixed':
                 return new FixedPageGrouper();
@@ -217,8 +180,6 @@ class GroupingStrategyFactory {
                 return new HeadingGrouper();
             case 'toc':
                 return new TOCGrouper();
-            case 'hybrid':
-                return new HybridGrouper();
             default:
                 return new FixedPageGrouper();
         }
@@ -228,6 +189,5 @@ class GroupingStrategyFactory {
         return handler.group(document, config);
     }
 }
-exports.GroupingStrategyFactory = GroupingStrategyFactory;
-exports.groupingFactory = new GroupingStrategyFactory();
+export const groupingFactory = new GroupingStrategyFactory();
 //# sourceMappingURL=strategies.js.map

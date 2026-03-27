@@ -137,9 +137,49 @@ export class QueryOrchestrator {
     return log;
   }
 
+  /**
+   * Generate a filename-safe slug from query text
+   */
+  private generateQuerySlug(query: string): string {
+    // Remove special characters and convert to lowercase
+    let slug = query
+      .toLowerCase()
+      .replace(/[^a-z0-9\s-]/g, '')
+      .trim();
+    
+    // Extract meaningful words (skip common words)
+    const stopWords = new Set([
+      'what', 'is', 'are', 'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 
+      'to', 'for', 'of', 'with', 'by', 'from', 'as', 'can', 'you', 'me', 'i',
+      'tell', 'show', 'explain', 'describe', 'how', 'does', 'do', 'will', 'would'
+    ]);
+    
+    const words = slug
+      .split(/\s+/)
+      .filter(word => word.length > 2 && !stopWords.has(word))
+      .slice(0, 5);  // Keep first 5 meaningful words
+    
+    // Join with underscores
+    slug = words.join('_');
+    
+    // Fallback if slug is empty
+    if (!slug || slug.length < 3) {
+      slug = 'query';
+    }
+    
+    // Limit length to 50 characters
+    if (slug.length > 50) {
+      slug = slug.substring(0, 50);
+    }
+    
+    return slug;
+  }
+
   async execute(request: QueryRequest): Promise<QueryResponse> {
     const startTime = Date.now();
-    const queryId = uuidv4();
+    const timestamp = Date.now();
+    const querySlug = this.generateQuerySlug(request.query);
+    const queryId = `${querySlug}_${timestamp}`;
     const llmCalls: LLMCallLog[] = [];
 
     const stored = this.documentStore.get(request.documentId);

@@ -4,10 +4,12 @@ import type { GroupingStrategy } from '../types/index.js';
 import type { LLMClient } from '../llm/client.js';
 import { DocumentStore, createDocumentStore } from '../store/index.js';
 import { QueryOrchestrator, createQueryOrchestrator, type QueryRequest } from '../orchestrator/index.js';
+import { PiMonoQueryAgent, createPiMonoQueryAgent } from '../query/index.js';
 
 export interface APIContext {
   documentStore: DocumentStore;
   queryOrchestrator: QueryOrchestrator;
+  piMonoQueryAgent: PiMonoQueryAgent;
   llmClient: LLMClient;
 }
 
@@ -36,7 +38,7 @@ export function createRouter(context: APIContext): Router {
 
       const stored = await context.documentStore.upload(source, {
         fileName,
-        groupingStrategy: groupingStrategy || 'hybrid',
+        groupingStrategy: groupingStrategy || 'toc',
       });
 
       res.json({
@@ -181,6 +183,39 @@ export function createRouter(context: APIContext): Router {
     }
   });
 
+  // New endpoint using PiMonoQueryAgent
+  router.post('/query-agents', async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { documentId, query, maxParallelSubAgents, extractionType, customPrompt } = req.body as {
+        documentId: string;
+        query: string;
+        maxParallelSubAgents?: number;
+        extractionType?: 'summary' | 'entities' | 'full' | 'custom';
+        customPrompt?: string;
+      };
+
+      if (!documentId || !query) {
+        return res.status(400).json({ error: 'documentId and query are required' });
+      }
+
+      const result = await context.piMonoQueryAgent.execute({
+        documentId,
+        query,
+        maxParallelSubAgents,
+        extractionType,
+        customPrompt,
+      });
+
+      res.json({
+        documentId,
+        query,
+        result,
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
   router.post('/documents/:id/query', async (req: Request, res: Response, next: NextFunction) => {
     try {
       const { id } = req.params;
@@ -220,10 +255,12 @@ export function createRouter(context: APIContext): Router {
 export function createAPIContext(llmClient: LLMClient): APIContext {
   const documentStore = createDocumentStore(llmClient);
   const queryOrchestrator = createQueryOrchestrator(llmClient, documentStore);
+  const piMonoQueryAgent = createPiMonoQueryAgent(documentStore);
 
   return {
     documentStore,
     queryOrchestrator,
+    piMonoQueryAgent,
     llmClient,
   };
 }

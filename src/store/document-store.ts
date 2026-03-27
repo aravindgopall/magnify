@@ -110,7 +110,7 @@ export class DocumentStore {
       groups = this.convertPythonGroups(pythonResult.groups, document);
     } else {
       // Fallback: Use old grouping logic
-      const strategy = options.groupingStrategy || 'hybrid';
+      const strategy = options.groupingStrategy || 'toc';
       
       if (strategy === 'fixed') {
         groups = this.createFixedGroups(document);
@@ -140,7 +140,7 @@ export class DocumentStore {
       metadata: {
         uploadedAt: new Date(),
         fileName: options.fileName,
-        groupingStrategy: options.groupingStrategy || 'hybrid',
+        groupingStrategy: options.groupingStrategy || 'toc',
         documentType,
         pdfType: document.pdfType,
       },

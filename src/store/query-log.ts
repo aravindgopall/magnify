@@ -1,5 +1,13 @@
 import fs from 'fs';
 import path from 'path';
+import { fileURLToPath } from 'url';
+import { dirname } from 'path';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+
+// Get the magnify root directory (parent of dist folder)
+const MAGNIFY_ROOT = path.resolve(__dirname, '../..');
 
 /**
  * Represents an LLM message for logging
@@ -122,8 +130,8 @@ export class QueryLogPersistence {
   private logsDir: string;
 
   constructor(logsDir?: string) {
-    // Default to 'logs/queries' directory in project root
-    this.logsDir = logsDir || path.join(process.cwd(), 'logs', 'queries');
+    // Default to 'logs/queries' directory in magnify folder
+    this.logsDir = logsDir || path.join(MAGNIFY_ROOT, 'logs', 'queries');
     this.ensureLogsDirectory();
   }
 
@@ -139,6 +147,7 @@ export class QueryLogPersistence {
 
   /**
    * Get the file path for a query log
+   * Note: queryId now includes query slug, so filename is descriptive
    */
   private getLogPath(queryId: string): string {
     return path.join(this.logsDir, `${queryId}.json`);

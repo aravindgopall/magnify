@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-export const GroupingStrategySchema = z.enum(['fixed', 'heading', 'toc', 'hybrid', 'range']);
+export const GroupingStrategySchema = z.enum(['fixed', 'heading', 'toc']);
 export type GroupingStrategy = z.infer<typeof GroupingStrategySchema>;
 
 export const OutputFormatSchema = z.enum(['json', 'markdown', 'summary', 'search-index']);

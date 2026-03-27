@@ -1,9 +1,7 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-const dotenv_1 = require("dotenv");
+import { config } from 'dotenv';
 // Load .env file with override=true to override system environment variables
-(0, dotenv_1.config)({ override: true });
-const index_js_1 = require("./api/index.js");
+config({ override: true });
+import { startServer } from './api/index.js';
 const port = parseInt(process.env.PORT || '3000', 10);
 const host = process.env.HOST || '0.0.0.0';
 // Determine LLM provider from environment
@@ -25,7 +23,7 @@ else if (llmProvider === 'openai') {
     llmConfig.model = process.env.LLM_MODEL || 'gpt-4';
 }
 // Start server with persistent storage
-(0, index_js_1.startServer)({
+startServer({
     port,
     host,
     llm: llmConfig,

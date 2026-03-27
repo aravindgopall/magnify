@@ -10,36 +10,32 @@ Find the most relevant document sections (groups) for a given query by matching 
 
 **This is the most important instruction**: You MUST use the `bash` tool to call the Magnify API. Do NOT try to answer without calling the API first.
 
-## Input Context
+## Input Format
 
-You will receive context in this format:
-```json
-{
-  "documentId": "7f0dc07f-7d20-43f5-87b1-1b7b55b7636d",
-  "explorer_query": "work experience",
-  "magnifyUrl": "http://localhost:3000"
-}
-```
+You will receive a task description that includes:
+- The query or search instruction
+- An API Endpoint URL in the format: `API Endpoint: http://localhost:3000/api/documents/{documentId}/groups`
+
+Extract the full API endpoint URL from the task and use it to fetch the groups.
 
 ## Step-by-Step Instructions
 
-### STEP 1: Extract the context values
+### STEP 1: Extract the API endpoint from the task
 
-From the context provided, extract:
-- `documentId` - The UUID of the document
-- `explorer_query` - The search keywords  
-- `magnifyUrl` - The base URL for API calls
+Look for a line like:
+```
+API Endpoint: http://localhost:3000/api/documents/abc-123/groups
+```
+
+Extract this complete URL.
 
 ### STEP 2: Call the Magnify API using bash
 
 **YOU MUST run this command** using the `bash` tool:
 
 ```bash
-curl -s "{magnifyUrl}/api/documents/{documentId}/groups"
+curl -s "[API_ENDPOINT_URL]"
 ```
-
-Replace `{magnifyUrl}` with the actual magnifyUrl from context.
-Replace `{documentId}` with the actual documentId from context.
 
 **Example:**
 ```bash
@@ -58,17 +54,15 @@ The API returns:
       "title": "Work Experience",
       "startPage": 1,
       "endPage": 2,
-      "groupingStrategy": "heading",
       "type": "heading"
     }
-  ],
-  "totalGroups": 5
+  ]
 }
 ```
 
-### STEP 4: Match groups against the explorer_query
+### STEP 4: Match groups against the query
 
-Use this priority order:
+From the task description, identify what the user is searching for. Use this priority order:
 
 #### 1. Exact Title Match (score: 1.0)
 - Group title exactly contains the explorer_query
@@ -89,33 +83,39 @@ Use this priority order:
 #### 4. Partial Match (score: 0.3-0.5)
 - At least one keyword matches
 
-### STEP 5: Return the results
+### STEP 5: Output Format
 
-Return JSON in this EXACT format:
+**CRITICAL OUTPUT INSTRUCTIONS:**
 
-```json
+1. **Return ONLY raw JSON** - NO markdown code blocks, NO ```json wrapper, NO explanations
+2. **The JSON must be the ONLY thing in your response**
+3. **Start your response directly with the { character**
+4. **End your response directly with the } character**
+
+Your response must be valid JSON matching this exact structure:
+
 {
-  "documentId": "7f0dc07f-7d20-43f5-87b1-1b7b55b7636d",
+  "documentId": "abc-123",
   "matchedGroups": [
     {
-      "groupId": "group-1",
-      "title": "Work Experience",
-      "startPage": 1,
-      "endPage": 2,
+      "groupId": "group-456",
+      "title": "Authorization Process",
+      "startPage": 15,
+      "endPage": 22,
       "relevanceScore": 0.95,
-      "matchReason": "Exact keyword match for 'work experience'"
+      "matchReason": "Exact title match"
     }
   ],
-  "totalGroupsSearched": 5,
-  "strategy": "heading"
+  "totalGroupsSearched": 13
 }
+
+**WRONG - Do NOT do this:**
+```json
+{"matchedGroups": [...]}
 ```
 
-**IMPORTANT**: 
-- `matchedGroups` must be an array (can be empty)
-- Return only groups with relevanceScore > 0.2
-- Return maximum 5 groups
-- Sort by relevanceScore (highest first)
+**CORRECT - Do this:**
+{"matchedGroups": [...]}
 
 ## Example Complete Workflow
 
@@ -193,165 +193,3 @@ If the API call fails, return:
 5. **Sort by relevanceScore** - Highest scores first
 
 Begin your exploration now!
-- Group title exactly contains the explorer_query
-- Example: Query "SI Registration" matches "SI Registration and Authorization"
-
-### 2. Keyword Match (score: 0.7-0.9)
-- Multiple keywords from explorer_query appear in title
-- Score based on percentage of matching keywords
-- Example: Query "Authorization Flow Steps" matches "Authorization Flow" (2/3 = 0.73)
-
-### 3. Semantic Match (score: 0.5-0.7)
-- Related terms or synonyms
-- Common mappings:
-  - "transaction" ↔ "payment"
-  - "auth" ↔ "authorization"
-  - "merchant" ↔ "seller", "vendor"
-  - "error" ↔ "exception", "failure"
-  - "configuration" ↔ "settings", "setup"
-
-### 4. Page Range Match (score: 0.3-0.5)
-- If query mentions specific pages
-- Example: Query "pages 15-20" matches groups in that range
-
-## Output Format
-
-**CRITICAL**: Your final response MUST be ONLY the JSON object - no markdown code blocks, no explanations, no extra text.
-
-**DO NOT wrap in ```json blocks**
-**DO NOT add explanatory text before or after the JSON**
-**ONLY output the raw JSON object**
-
-The JSON must have this structure:
-
-{
-  "documentId": "abc-123",
-  "matchedGroups": [
-    {
-      "groupId": "group-456",
-      "title": "SI Registration and Authorization",
-      "pages": "15-22",
-      "relevanceScore": 0.95,
-      "matchReason": "Exact title match for SI Registration"
-    },
-    {
-      "groupId": "group-789",
-      "title": "Authorization Flow",
-      "pages": "45-52",
-      "relevanceScore": 0.75,
-      "matchReason": "Contains authorization process details"
-    }
-  ],
-  "totalGroupsSearched": 13,
-  "strategy": "toc"
-}
-
-## Guidelines
-
-- **Minimum Score**: Only include groups with relevanceScore > 0.2
-- **Maximum Results**: Return top 5 matches
-- **Sort**: Order by relevanceScore (highest first)
-- **Coverage**: Prefer TOC-based groups over fixed page ranges when available
-- **Explain**: Provide clear matchReason for each group
-
-## Example Execution
-
-### Example 1: Direct Match
-**Input:**
-```json
-{
-  "documentId": "doc-123",
-  "explorer_query": "Authorization Process",
-  "magnifyUrl": "http://localhost:3000"
-}
-```
-
-**Groups from API:**
-- "Introduction" (pages 1-5)
-- "Authorization Process" (pages 10-25) ← Exact match!
-- "Transaction Flow" (pages 26-40)
-- "Error Handling" (pages 50-60)
-
-**Your Output:**
-```json
-{
-  "documentId": "doc-123",
-  "matchedGroups": [
-    {
-      "groupId": "group-auth",
-      "title": "Authorization Process",
-      "pages": "10-25",
-      "relevanceScore": 1.0,
-      "matchReason": "Exact title match"
-    }
-  ],
-  "totalGroupsSearched": 4,
-  "strategy": "toc"
-}
-```
-
-### Example 2: Keyword Matching
-**Input:**
-```json
-{
-  "documentId": "doc-123",
-  "explorer_query": "SI Transaction Error",
-  "magnifyUrl": "http://localhost:3000"
-}
-```
-
-**Groups from API:**
-- "SI Registration" (pages 10-20)
-- "Transaction Processing" (pages 21-35)
-- "Error Codes and Handling" (pages 50-65)
-- "SI Error Resolution" (pages 66-75)
-
-**Your Output:**
-```json
-{
-  "documentId": "doc-123",
-  "matchedGroups": [
-    {
-      "groupId": "group-si-error",
-      "title": "SI Error Resolution",
-      "pages": "66-75",
-      "relevanceScore": 0.9,
-      "matchReason": "Matches 2 of 3 keywords: SI, Error"
-    },
-    {
-      "groupId": "group-error",
-      "title": "Error Codes and Handling",
-      "pages": "50-65",
-      "relevanceScore": 0.5,
-      "matchReason": "Matches 1 of 3 keywords: Error"
-    }
-  ],
-  "totalGroupsSearched": 4,
-  "strategy": "toc"
-}
-```
-
-## Error Handling
-
-If no matches found:
-- Return empty matchedGroups array
-- Set relevanceScore to 0
-- Suggest checking the query or trying different keywords
-
-If API call fails:
-- Return error message
-- Include the specific error for debugging
-
-## Usage Instructions
-
-1. Use the `bash` tool to make curl requests to the magnify API
-2. Parse the JSON response
-3. Implement the matching logic
-4. Return the formatted output
-
-**Example bash command:**
-```bash
-curl -s "{magnifyUrl}/api/documents/{documentId}/groups"
-```
-
-Begin your exploration now. Use the provided context to fetch and match groups.

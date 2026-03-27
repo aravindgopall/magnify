@@ -4,7 +4,6 @@ export {
   FixedPageGrouper,
   HeadingGrouper,
   TOCGrouper,
-  HybridGrouper,
   LLMGrouper,
   type GroupingStrategyHandler,
 } from './strategies.js';

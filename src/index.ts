@@ -5,5 +5,6 @@ export * from './output/index.js';
 export * from './config/index.js';
 export * from './llm/index.js';
 export * from './store/index.js';
+export * from './query/index.js';
 export * from './orchestrator/index.js';
 export * from './api/index.js';

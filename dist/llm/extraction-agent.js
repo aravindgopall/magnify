@@ -1,16 +1,12 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.LLMExtractionAgent = void 0;
-exports.createLLMExtractionAgent = createLLMExtractionAgent;
-const uuid_1 = require("uuid");
-class LLMExtractionAgent {
+import { v4 as uuidv4 } from 'uuid';
+export class LLMExtractionAgent {
     llmClient;
     agentId;
     customPrompt;
     extractionSchema;
     constructor(llmClient, options = {}) {
         this.llmClient = llmClient;
-        this.agentId = options.agentId || (0, uuid_1.v4)();
+        this.agentId = options.agentId || uuidv4();
         this.customPrompt = options.customPrompt;
         this.extractionSchema = options.extractionSchema;
     }
@@ -137,8 +133,7 @@ Extraction Guidelines:
 Always respond with valid JSON. Be thorough but accurate. If information is unclear, note it in the confidence score.`;
     }
 }
-exports.LLMExtractionAgent = LLMExtractionAgent;
-function createLLMExtractionAgent(llmClient, options) {
+export function createLLMExtractionAgent(llmClient, options) {
     return new LLMExtractionAgent(llmClient, options);
 }
 //# sourceMappingURL=extraction-agent.js.map

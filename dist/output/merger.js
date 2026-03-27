@@ -1,9 +1,4 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.OutputFormatter = exports.OutputMerger = void 0;
-exports.createMerger = createMerger;
-exports.createFormatter = createFormatter;
-class OutputMerger {
+export class OutputMerger {
     options;
     constructor(options = {}) {
         this.options = {
@@ -174,8 +169,7 @@ class OutputMerger {
         return contents.join('\n\n---\n\n');
     }
 }
-exports.OutputMerger = OutputMerger;
-class OutputFormatter {
+export class OutputFormatter {
     format(output, config) {
         switch (config.format) {
             case 'json':
@@ -337,11 +331,10 @@ class OutputFormatter {
         return grouped;
     }
 }
-exports.OutputFormatter = OutputFormatter;
-function createMerger(options) {
+export function createMerger(options) {
     return new OutputMerger(options);
 }
-function createFormatter() {
+export function createFormatter() {
     return new OutputFormatter();
 }
 //# sourceMappingURL=merger.js.map

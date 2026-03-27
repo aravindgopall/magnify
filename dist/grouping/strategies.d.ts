@@ -20,13 +20,6 @@ export declare class TOCGrouper implements GroupingStrategyHandler {
     group(document: PDFDocument, config: GroupingConfig): Promise<DocumentGroup[]>;
     private flattenTOC;
 }
-export declare class HybridGrouper implements GroupingStrategyHandler {
-    private tocGrouper;
-    private headingGrouper;
-    private fixedGrouper;
-    group(document: PDFDocument, config: GroupingConfig): Promise<DocumentGroup[]>;
-    private hasHeadings;
-}
 export declare class GroupingStrategyFactory {
     private llmClient?;
     setLLMClient(client: LLMClient): void;

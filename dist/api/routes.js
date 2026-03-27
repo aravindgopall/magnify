@@ -1,19 +1,12 @@
-"use strict";
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.createRouter = createRouter;
-exports.createAPIContext = createAPIContext;
-exports.initializeAPIContext = initializeAPIContext;
-const express_1 = __importDefault(require("express"));
-const index_js_1 = require("../store/index.js");
-const index_js_2 = require("../orchestrator/index.js");
+import express from 'express';
+import { createDocumentStore } from '../store/index.js';
+import { createQueryOrchestrator } from '../orchestrator/index.js';
+import { createPiMonoQueryAgent } from '../query/index.js';
 const defaultAPIConfig = {
     maxFileSize: 50 * 1024 * 1024,
 };
-function createRouter(context) {
-    const router = express_1.default.Router();
+export function createRouter(context) {
+    const router = express.Router();
     router.post('/documents/upload', async (req, res, next) => {
         try {
             const { source, fileName, groupingStrategy } = req.body;
@@ -22,7 +15,7 @@ function createRouter(context) {
             }
             const stored = await context.documentStore.upload(source, {
                 fileName,
-                groupingStrategy: groupingStrategy || 'hybrid',
+                groupingStrategy: groupingStrategy || 'toc',
             });
             res.json({
                 documentId: stored.id,
@@ -151,6 +144,30 @@ function createRouter(context) {
             next(error);
         }
     });
+    // New endpoint using PiMonoQueryAgent
+    router.post('/query-agents', async (req, res, next) => {
+        try {
+            const { documentId, query, maxParallelSubAgents, extractionType, customPrompt } = req.body;
+            if (!documentId || !query) {
+                return res.status(400).json({ error: 'documentId and query are required' });
+            }
+            const result = await context.piMonoQueryAgent.execute({
+                documentId,
+                query,
+                maxParallelSubAgents,
+                extractionType,
+                customPrompt,
+            });
+            res.json({
+                documentId,
+                query,
+                result,
+            });
+        }
+        catch (error) {
+            next(error);
+        }
+    });
     router.post('/documents/:id/query', async (req, res, next) => {
         try {
             const { id } = req.params;
@@ -182,19 +199,21 @@ function createRouter(context) {
     });
     return router;
 }
-function createAPIContext(llmClient) {
-    const documentStore = (0, index_js_1.createDocumentStore)(llmClient);
-    const queryOrchestrator = (0, index_js_2.createQueryOrchestrator)(llmClient, documentStore);
+export function createAPIContext(llmClient) {
+    const documentStore = createDocumentStore(llmClient);
+    const queryOrchestrator = createQueryOrchestrator(llmClient, documentStore);
+    const piMonoQueryAgent = createPiMonoQueryAgent(documentStore);
     return {
         documentStore,
         queryOrchestrator,
+        piMonoQueryAgent,
         llmClient,
     };
 }
 /**
  * Initialize the API context by loading persisted documents
  */
-async function initializeAPIContext(context) {
+export async function initializeAPIContext(context) {
     await context.documentStore.initialize();
 }
 //# sourceMappingURL=routes.js.map

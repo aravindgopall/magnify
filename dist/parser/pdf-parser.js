@@ -1,14 +1,11 @@
-"use strict";
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.PDFParser = void 0;
-exports.createParser = createParser;
-const child_process_1 = require("child_process");
-const path_1 = __importDefault(require("path"));
-const uuid_1 = require("uuid");
-class PDFParser {
+import { fileURLToPath } from 'url';
+import { dirname } from 'path';
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+import { spawn } from 'child_process';
+import path from 'path';
+import { v4 as uuidv4 } from 'uuid';
+export class PDFParser {
     options;
     _lastPythonResult = null;
     constructor(options = {}) {
@@ -55,7 +52,7 @@ class PDFParser {
         // Write buffer to temp file
         const fs = await import('fs/promises');
         const os = await import('os');
-        const tempFile = path_1.default.join(os.tmpdir(), `pdf-${(0, uuid_1.v4)()}.pdf`);
+        const tempFile = path.join(os.tmpdir(), `pdf-${uuidv4()}.pdf`);
         await fs.writeFile(tempFile, source);
         return { filePath: tempFile, cleanup: true };
     }
@@ -64,13 +61,36 @@ class PDFParser {
      */
     async runPythonExtractor(pdfPath) {
         const scriptPath = this.options.pythonScriptPath ||
-            path_1.default.join(__dirname, '../../scripts/pdf_extractor.py');
+            path.join(__dirname, '../../scripts/pdf_extractor.py');
         const args = [scriptPath, pdfPath];
+        // Add output directory if specified
         if (this.options.outputDir) {
-            args.push(this.options.outputDir);
+            args.push('--output-dir', this.options.outputDir);
+        }
+        // Add grouping strategy if specified
+        if (this.options.groupingStrategy) {
+            args.push('--strategy', this.options.groupingStrategy);
+            console.log(`[PDFParser] Using grouping strategy: ${this.options.groupingStrategy}`);
+        }
+        // Add performance optimization flags
+        if (this.options.skipTables) {
+            args.push('--skip-tables');
+            console.log('[PDFParser] Skipping table extraction for performance');
+        }
+        if (this.options.skipImages) {
+            args.push('--skip-images');
+            console.log('[PDFParser] Skipping image extraction for performance');
+        }
+        if (this.options.skipOCR) {
+            args.push('--skip-ocr');
+            console.log('[PDFParser] Skipping OCR for performance');
+        }
+        if (this.options.skipFontInfo) {
+            args.push('--no-font-info');
+            console.log('[PDFParser] Skipping font metadata for performance');
         }
         return new Promise((resolve, reject) => {
-            const pythonProcess = (0, child_process_1.spawn)('python3', args, {
+            const pythonProcess = spawn('python3', args, {
                 stdio: ['ignore', 'pipe', 'pipe'],
             });
             let stdout = '';
@@ -222,7 +242,7 @@ class PDFParser {
         }
         const metadata = await this.extractMetadataPDFJS(pdfJsDoc);
         return {
-            id: (0, uuid_1.v4)(),
+            id: uuidv4(),
             source,
             metadata,
             pages,
@@ -320,8 +340,7 @@ class PDFParser {
         return this._lastPythonResult;
     }
 }
-exports.PDFParser = PDFParser;
-function createParser(options) {
+export function createParser(options) {
     return new PDFParser(options);
 }
 //# sourceMappingURL=pdf-parser.js.map

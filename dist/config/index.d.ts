@@ -1,26 +1,26 @@
 import { z } from 'zod';
 import type { PipelineConfig } from '../types/index.js';
 export declare const GroupingConfigSchema: z.ZodObject<{
-    strategy: z.ZodEnum<["fixed", "heading", "toc", "hybrid"]>;
+    strategy: z.ZodEnum<["fixed", "heading", "toc"]>;
     fixedPagesPerGroup: z.ZodOptional<z.ZodNumber>;
     headingLevels: z.ZodOptional<z.ZodArray<z.ZodNumber, "many">>;
     minGroupSize: z.ZodOptional<z.ZodNumber>;
     maxGroupSize: z.ZodOptional<z.ZodNumber>;
-    fallbackStrategy: z.ZodOptional<z.ZodEnum<["fixed", "heading", "toc", "hybrid"]>>;
+    fallbackStrategy: z.ZodOptional<z.ZodEnum<["fixed", "heading", "toc"]>>;
 }, "strip", z.ZodTypeAny, {
-    strategy: "fixed" | "heading" | "toc" | "hybrid";
+    strategy: "fixed" | "heading" | "toc";
     fixedPagesPerGroup?: number | undefined;
     headingLevels?: number[] | undefined;
     minGroupSize?: number | undefined;
     maxGroupSize?: number | undefined;
-    fallbackStrategy?: "fixed" | "heading" | "toc" | "hybrid" | undefined;
+    fallbackStrategy?: "fixed" | "heading" | "toc" | undefined;
 }, {
-    strategy: "fixed" | "heading" | "toc" | "hybrid";
+    strategy: "fixed" | "heading" | "toc";
     fixedPagesPerGroup?: number | undefined;
     headingLevels?: number[] | undefined;
     minGroupSize?: number | undefined;
     maxGroupSize?: number | undefined;
-    fallbackStrategy?: "fixed" | "heading" | "toc" | "hybrid" | undefined;
+    fallbackStrategy?: "fixed" | "heading" | "toc" | undefined;
 }>;
 export declare const ExtractionConfigSchema: z.ZodObject<{
     schema: z.ZodOptional<z.ZodRecord<z.ZodString, z.ZodUnknown>>;
@@ -72,26 +72,26 @@ export declare const ExecutionConfigSchema: z.ZodObject<{
 }>;
 export declare const PipelineConfigSchema: z.ZodObject<{
     grouping: z.ZodObject<{
-        strategy: z.ZodEnum<["fixed", "heading", "toc", "hybrid"]>;
+        strategy: z.ZodEnum<["fixed", "heading", "toc"]>;
         fixedPagesPerGroup: z.ZodOptional<z.ZodNumber>;
         headingLevels: z.ZodOptional<z.ZodArray<z.ZodNumber, "many">>;
         minGroupSize: z.ZodOptional<z.ZodNumber>;
         maxGroupSize: z.ZodOptional<z.ZodNumber>;
-        fallbackStrategy: z.ZodOptional<z.ZodEnum<["fixed", "heading", "toc", "hybrid"]>>;
+        fallbackStrategy: z.ZodOptional<z.ZodEnum<["fixed", "heading", "toc"]>>;
     }, "strip", z.ZodTypeAny, {
-        strategy: "fixed" | "heading" | "toc" | "hybrid";
+        strategy: "fixed" | "heading" | "toc";
         fixedPagesPerGroup?: number | undefined;
         headingLevels?: number[] | undefined;
         minGroupSize?: number | undefined;
         maxGroupSize?: number | undefined;
-        fallbackStrategy?: "fixed" | "heading" | "toc" | "hybrid" | undefined;
+        fallbackStrategy?: "fixed" | "heading" | "toc" | undefined;
     }, {
-        strategy: "fixed" | "heading" | "toc" | "hybrid";
+        strategy: "fixed" | "heading" | "toc";
         fixedPagesPerGroup?: number | undefined;
         headingLevels?: number[] | undefined;
         minGroupSize?: number | undefined;
         maxGroupSize?: number | undefined;
-        fallbackStrategy?: "fixed" | "heading" | "toc" | "hybrid" | undefined;
+        fallbackStrategy?: "fixed" | "heading" | "toc" | undefined;
     }>;
     extraction: z.ZodOptional<z.ZodObject<{
         schema: z.ZodOptional<z.ZodRecord<z.ZodString, z.ZodUnknown>>;
@@ -143,12 +143,12 @@ export declare const PipelineConfigSchema: z.ZodObject<{
     }>;
 }, "strip", z.ZodTypeAny, {
     grouping: {
-        strategy: "fixed" | "heading" | "toc" | "hybrid";
+        strategy: "fixed" | "heading" | "toc";
         fixedPagesPerGroup?: number | undefined;
         headingLevels?: number[] | undefined;
         minGroupSize?: number | undefined;
         maxGroupSize?: number | undefined;
-        fallbackStrategy?: "fixed" | "heading" | "toc" | "hybrid" | undefined;
+        fallbackStrategy?: "fixed" | "heading" | "toc" | undefined;
     };
     output: {
         format: "json" | "markdown" | "summary" | "search-index";
@@ -170,12 +170,12 @@ export declare const PipelineConfigSchema: z.ZodObject<{
     } | undefined;
 }, {
     grouping: {
-        strategy: "fixed" | "heading" | "toc" | "hybrid";
+        strategy: "fixed" | "heading" | "toc";
         fixedPagesPerGroup?: number | undefined;
         headingLevels?: number[] | undefined;
         minGroupSize?: number | undefined;
         maxGroupSize?: number | undefined;
-        fallbackStrategy?: "fixed" | "heading" | "toc" | "hybrid" | undefined;
+        fallbackStrategy?: "fixed" | "heading" | "toc" | undefined;
     };
     output: {
         format: "json" | "markdown" | "summary" | "search-index";

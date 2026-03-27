@@ -1,9 +1,5 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.MainAgent = void 0;
-exports.createMainAgent = createMainAgent;
-const uuid_1 = require("uuid");
-class MainAgent {
+import { v4 as uuidv4 } from 'uuid';
+export class MainAgent {
     llmClient;
     constructor(llmClient) {
         this.llmClient = llmClient;
@@ -42,7 +38,7 @@ Respond with a JSON object containing:
         const response = await this.llmClient.completeWithJSON(messages);
         for (const group of response.groups) {
             if (!group.id) {
-                group.id = (0, uuid_1.v4)();
+                group.id = uuidv4();
             }
         }
         return response;
@@ -53,7 +49,7 @@ Respond with a JSON object containing:
         const effectiveStrategy = strategy || analysis.recommendedStrategy;
         for (const identifiedGroup of analysis.groups) {
             const startPage = Math.max(1, identifiedGroup.startPage);
-            const endPage = Math.min(document.pages.length, identifiedGroup.endPage);
+            const endPage = Math.max(startPage, Math.min(document.pages.length, identifiedGroup.endPage));
             const groupPages = document.pages.slice(startPage - 1, endPage);
             groups.push({
                 id: identifiedGroup.id,
@@ -133,8 +129,7 @@ Guidelines for grouping:
 Always respond with valid JSON matching the requested schema.`;
     }
 }
-exports.MainAgent = MainAgent;
-function createMainAgent(llmClient) {
+export function createMainAgent(llmClient) {
     return new MainAgent(llmClient);
 }
 //# sourceMappingURL=main-agent.js.map

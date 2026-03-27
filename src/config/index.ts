@@ -2,12 +2,12 @@ import { z } from 'zod';
 import type { PipelineConfig } from '../types/index.js';
 
 export const GroupingConfigSchema = z.object({
-  strategy: z.enum(['fixed', 'heading', 'toc', 'hybrid']),
+  strategy: z.enum(['fixed', 'heading', 'toc']),
   fixedPagesPerGroup: z.number().min(1).optional(),
   headingLevels: z.array(z.number().min(1).max(6)).optional(),
   minGroupSize: z.number().min(1).optional(),
   maxGroupSize: z.number().min(1).optional(),
-  fallbackStrategy: z.enum(['fixed', 'heading', 'toc', 'hybrid']).optional(),
+  fallbackStrategy: z.enum(['fixed', 'heading', 'toc']).optional(),
 });
 
 export const ExtractionConfigSchema = z.object({
@@ -45,7 +45,7 @@ export function validateConfig(config: unknown): PipelineConfig {
 export function createDefaultConfig(): PipelineConfig {
   return {
     grouping: {
-      strategy: 'hybrid',
+      strategy: 'toc',
       fixedPagesPerGroup: 10,
       minGroupSize: 1,
       maxGroupSize: 50,
@@ -82,14 +82,14 @@ export function createConfig(overrides: Partial<PipelineConfig> = {}): PipelineC
 
 export const PRESETS = {
   fast: createConfig({
-    grouping: { strategy: 'hybrid', fixedPagesPerGroup: 10, minGroupSize: 1, maxGroupSize: 50 },
+    grouping: { strategy: 'toc', fixedPagesPerGroup: 10, minGroupSize: 1, maxGroupSize: 50 },
     extraction: { defaultPrompt: 'Extract structured information from this document section.' },
     output: { format: 'json', includeMetadata: true, includeSourcePages: false, prettyPrint: true },
     execution: { maxConcurrency: 8, retryAttempts: 1, timeout: 30000, continueOnError: true, retryDelay: 500 },
   }),
   
   thorough: createConfig({
-    grouping: { strategy: 'hybrid', fixedPagesPerGroup: 10, minGroupSize: 1, maxGroupSize: 50 },
+    grouping: { strategy: 'toc', fixedPagesPerGroup: 10, minGroupSize: 1, maxGroupSize: 50 },
     extraction: { defaultPrompt: 'Extract structured information from this document section.' },
     output: { format: 'json', includeMetadata: true, includeSourcePages: false, prettyPrint: true },
     execution: { maxConcurrency: 2, retryAttempts: 5, timeout: 120000, continueOnError: false, retryDelay: 2000 },
@@ -110,7 +110,7 @@ export const PRESETS = {
   }),
   
   searchIndex: createConfig({
-    grouping: { strategy: 'hybrid', fixedPagesPerGroup: 5, minGroupSize: 1, maxGroupSize: 50 },
+    grouping: { strategy: 'toc', fixedPagesPerGroup: 5, minGroupSize: 1, maxGroupSize: 50 },
     extraction: { defaultPrompt: 'Extract structured information from this document section.' },
     output: { format: 'search-index', includeMetadata: true, includeSourcePages: true, prettyPrint: false },
     execution: { maxConcurrency: 4, retryAttempts: 3, timeout: 60000, continueOnError: true, retryDelay: 1000 },

@@ -2,9 +2,11 @@ import { type Router } from 'express';
 import type { LLMClient } from '../llm/client.js';
 import { DocumentStore } from '../store/index.js';
 import { QueryOrchestrator } from '../orchestrator/index.js';
+import { PiMonoQueryAgent } from '../query/index.js';
 export interface APIContext {
     documentStore: DocumentStore;
     queryOrchestrator: QueryOrchestrator;
+    piMonoQueryAgent: PiMonoQueryAgent;
     llmClient: LLMClient;
 }
 export interface APIConfig {

@@ -1,8 +1,4 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.LiteLLMClient = exports.OpenAIClient = exports.MockLLMClient = exports.LLMClient = void 0;
-exports.createLLMClient = createLLMClient;
-class LLMClient {
+export class LLMClient {
     config;
     constructor(config = {}) {
         this.config = {
@@ -19,8 +15,7 @@ class LLMClient {
         return basePrompt;
     }
 }
-exports.LLMClient = LLMClient;
-class MockLLMClient extends LLMClient {
+export class MockLLMClient extends LLMClient {
     async complete(messages) {
         const lastMessage = messages[messages.length - 1];
         return {
@@ -77,8 +72,7 @@ class MockLLMClient extends LLMClient {
         return {};
     }
 }
-exports.MockLLMClient = MockLLMClient;
-class OpenAIClient extends LLMClient {
+export class OpenAIClient extends LLMClient {
     apiKey;
     constructor(config) {
         super(config);
@@ -134,8 +128,7 @@ class OpenAIClient extends LLMClient {
         }
     }
 }
-exports.OpenAIClient = OpenAIClient;
-class LiteLLMClient extends LLMClient {
+export class LiteLLMClient extends LLMClient {
     apiKey;
     baseURL;
     constructor(config) {
@@ -194,13 +187,14 @@ class LiteLLMClient extends LLMClient {
         }
     }
 }
-exports.LiteLLMClient = LiteLLMClient;
-function createLLMClient(config) {
+export function createLLMClient(config) {
     const provider = config.provider || 'mock';
+    console.log(`[LLM] Creating LLM client with provider: ${provider}`);
     if (provider === 'openai') {
         if (!config.apiKey) {
             throw new Error('OpenAI API key is required for OpenAI provider');
         }
+        console.log('[LLM] Initializing OpenAI client');
         return new OpenAIClient({ ...config, apiKey: config.apiKey });
     }
     if (provider === 'litellm') {
@@ -210,8 +204,10 @@ function createLLMClient(config) {
         if (!config.baseURL) {
             throw new Error('LiteLLM URL is required for LiteLLM provider');
         }
+        console.log(`[LLM] Initializing LiteLLM client - Model: ${config.model}, URL: ${config.baseURL}`);
         return new LiteLLMClient({ ...config, apiKey: config.apiKey, baseURL: config.baseURL });
     }
+    console.log('[LLM] Falling back to MockLLMClient');
     return new MockLLMClient(config);
 }
 //# sourceMappingURL=client.js.map

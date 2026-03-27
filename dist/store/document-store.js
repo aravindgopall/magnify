@@ -1,12 +1,8 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.DocumentStore = void 0;
-exports.createDocumentStore = createDocumentStore;
-const uuid_1 = require("uuid");
-const index_js_1 = require("../parser/index.js");
-const main_agent_js_1 = require("../llm/main-agent.js");
-const persistence_js_1 = require("./persistence.js");
-class DocumentStore {
+import { v4 as uuidv4 } from 'uuid';
+import { createParser } from '../parser/index.js';
+import { MainAgent } from '../llm/main-agent.js';
+import { createDocumentPersistence } from './persistence.js';
+export class DocumentStore {
     documents = new Map();
     llmClient;
     mainAgent;
@@ -15,8 +11,8 @@ class DocumentStore {
     usePythonExtractor;
     constructor(llmClient, options) {
         this.llmClient = llmClient;
-        this.mainAgent = new main_agent_js_1.MainAgent(llmClient);
-        this.persistence = (0, persistence_js_1.createDocumentPersistence)(options?.dataDir);
+        this.mainAgent = new MainAgent(llmClient);
+        this.persistence = createDocumentPersistence(options?.dataDir);
         this.usePythonExtractor = options?.usePythonExtractor !== false; // Default to true
     }
     /**
@@ -43,7 +39,7 @@ class DocumentStore {
     }
     async upload(source, options = {}) {
         // Use Python extractor for enhanced extraction
-        const parser = (0, index_js_1.createParser)({
+        const parser = createParser({
             usePythonExtractor: this.usePythonExtractor,
             outputDir: this.persistence.getDataDir(),
         });
@@ -60,7 +56,7 @@ class DocumentStore {
         }
         else {
             // Fallback: Use old grouping logic
-            const strategy = options.groupingStrategy || 'hybrid';
+            const strategy = options.groupingStrategy || 'toc';
             if (strategy === 'fixed') {
                 groups = this.createFixedGroups(document);
             }
@@ -90,7 +86,7 @@ class DocumentStore {
             metadata: {
                 uploadedAt: new Date(),
                 fileName: options.fileName,
-                groupingStrategy: options.groupingStrategy || 'hybrid',
+                groupingStrategy: options.groupingStrategy || 'toc',
                 documentType,
                 pdfType: document.pdfType,
             },
@@ -199,7 +195,7 @@ class DocumentStore {
             const startPage = i + 1;
             const endPage = Math.min(i + pagesPerGroup, pages.length);
             groups.push({
-                id: (0, uuid_1.v4)(),
+                id: uuidv4(),
                 type: 'fixed',
                 title: `Pages ${startPage}-${endPage}`,
                 startPage,
@@ -213,8 +209,7 @@ class DocumentStore {
         return groups;
     }
 }
-exports.DocumentStore = DocumentStore;
-function createDocumentStore(llmClient, options) {
+export function createDocumentStore(llmClient, options) {
     return new DocumentStore(llmClient, options);
 }
 //# sourceMappingURL=document-store.js.map

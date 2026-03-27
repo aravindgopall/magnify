@@ -1,17 +1,10 @@
-"use strict";
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.LLMPipeline = void 0;
-exports.createLLMPipeline = createLLMPipeline;
-const p_queue_1 = __importDefault(require("p-queue"));
-const p_retry_1 = __importDefault(require("p-retry"));
-const uuid_1 = require("uuid");
-const index_js_1 = require("../parser/index.js");
-const index_js_2 = require("../llm/index.js");
-const index_js_3 = require("../output/index.js");
-class LLMPipeline {
+import PQueue from 'p-queue';
+import pRetry from 'p-retry';
+import { v4 as uuidv4 } from 'uuid';
+import { createParser } from '../parser/index.js';
+import { MainAgent, LLMExtractionAgent } from '../llm/index.js';
+import { OutputMerger, OutputFormatter } from '../output/index.js';
+export class LLMPipeline {
     config;
     parser;
     mainAgent;
@@ -22,13 +15,13 @@ class LLMPipeline {
     queue;
     constructor(config, hooks) {
         this.config = config;
-        this.parser = (0, index_js_1.createParser)();
+        this.parser = createParser();
         this.llmClient = config.llmClient;
-        this.mainAgent = new index_js_2.MainAgent(this.llmClient);
-        this.merger = new index_js_3.OutputMerger();
-        this.formatter = new index_js_3.OutputFormatter();
+        this.mainAgent = new MainAgent(this.llmClient);
+        this.merger = new OutputMerger();
+        this.formatter = new OutputFormatter();
         this.hooks = hooks || {};
-        this.queue = new p_queue_1.default({
+        this.queue = new PQueue({
             concurrency: config.execution?.maxConcurrency || 4,
         });
     }
@@ -125,7 +118,7 @@ class LLMPipeline {
             const startPage = i + 1;
             const endPage = Math.min(i + pagesPerGroup, pages.length);
             groups.push({
-                id: (0, uuid_1.v4)(),
+                id: uuidv4(),
                 type: 'fixed',
                 title: `Pages ${startPage}-${endPage}`,
                 startPage,
@@ -144,8 +137,8 @@ class LLMPipeline {
         const maxRetries = this.config.execution?.retryAttempts || 3;
         const timeout = this.config.execution?.timeout || 60000;
         const tasks = groups.map(async (group) => {
-            return (0, p_retry_1.default)(async () => {
-                const agent = new index_js_2.LLMExtractionAgent(this.llmClient, {
+            return pRetry(async () => {
+                const agent = new LLMExtractionAgent(this.llmClient, {
                     agentId: `subagent-${group.id}`,
                     customPrompt: this.config.extractionPrompt,
                     extractionSchema: this.config.extractionSchema,
@@ -254,8 +247,7 @@ class LLMPipeline {
         });
     }
 }
-exports.LLMPipeline = LLMPipeline;
-function createLLMPipeline(config, hooks) {
+export function createLLMPipeline(config, hooks) {
     return new LLMPipeline(config, hooks);
 }
 //# sourceMappingURL=llm-pipeline.js.map

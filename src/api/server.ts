@@ -2,8 +2,6 @@ import express, { type Express, type Request, type Response, type NextFunction }
 import cors from 'cors';
 import { createLLMClient, type LLMClient } from '../llm/index.js';
 import { createRouter, createAPIContext, initializeAPIContext, type APIContext } from './routes.js';
-import { createAgentRoutes } from './agent-routes.js';
-import { createPiMonoRoutes } from './pi-mono-routes.js';
 
 export interface ServerConfig {
   port: number;
@@ -44,8 +42,6 @@ export function createServer(config?: Partial<ServerConfig>): { app: Express; co
   app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
   app.use('/api', createRouter(context));
-  app.use('/api', createAgentRoutes(context));
-  app.use('/api', createPiMonoRoutes(context));
 
   app.get('/', (_req: Request, res: Response) => {
     res.json({
