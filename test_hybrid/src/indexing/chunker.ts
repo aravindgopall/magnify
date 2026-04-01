@@ -1,0 +1,341 @@
+import { v4 as uuidv4 } from 'uuid';
+import type { Chunk, ChunkMetadata, Document, DocumentMetadata } from '../types/index.js';
+
+/**
+ * Simple tokenizer for estimating token count.
+ * Uses whitespace and punctuation-based tokenization as an approximation.
+ * For production, consider using a proper tokenizer like tiktoken.
+ */
+export function estimateTokenCount(text: string): number {
+  // Simple heuristic: ~4 characters per token on average
+  // This is a rough approximation; actual token count varies by tokenizer
+  return Math.ceil(text.length / 4);
+}
+
+/**
+ * Split text into sentences.
+ */
+function splitIntoSentences(text: string): string[] {
+  // Match sentence boundaries: period, exclamation, question mark followed by space or end
+  const sentenceEndings = /[.!?]+\s+/g;
+  const sentences: string[] = [];
+  let lastIndex = 0;
+  let match;
+
+  while ((match = sentenceEndings.exec(text)) !== null) {
+    const sentence = text.slice(lastIndex, match.index + match[0].length).trim();
+    if (sentence) {
+      sentences.push(sentence);
+    }
+    lastIndex = match.index + match[0].length;
+  }
+
+  // Add remaining text as last sentence
+  const remaining = text.slice(lastIndex).trim();
+  if (remaining) {
+    sentences.push(remaining);
+  }
+
+  return sentences.length > 0 ? sentences : [text];
+}
+
+/**
+ * Split text into chunks of approximately targetTokenCount tokens.
+ * Respects sentence boundaries to maintain semantic coherence.
+ */
+export function chunkText(
+  text: string,
+  targetTokenCount: number = 512,
+  overlapTokens: number = 50,
+  metadata?: Partial<ChunkMetadata>
+): Omit<Chunk, 'id' | 'documentId' | 'position'>[] {
+  const sentences = splitIntoSentences(text);
+  const chunks: Omit<Chunk, 'id' | 'documentId' | 'position'>[] = [];
+  
+  let currentChunk: string[] = [];
+  let currentTokenCount = 0;
+  const overlapSentences: string[] = [];
+
+  for (const sentence of sentences) {
+    const sentenceTokens = estimateTokenCount(sentence);
+
+    // If single sentence exceeds target, split it further
+    if (sentenceTokens > targetTokenCount) {
+      // Flush current chunk if any
+      if (currentChunk.length > 0) {
+        const chunkText = currentChunk.join(' ');
+        chunks.push({
+          text: chunkText,
+          tokenCount: estimateTokenCount(chunkText),
+          pageNumber: metadata?.pageNumber,
+          metadata: {
+            ...metadata,
+            heading: metadata?.heading,
+          },
+        });
+        currentChunk = [];
+        currentTokenCount = 0;
+      }
+
+      // Split long sentence by clauses/commas
+      const clauses = sentence.split(/,\s*|;\s*/);
+      let clauseChunk: string[] = [];
+      let clauseTokens = 0;
+
+      for (const clause of clauses) {
+        const clauseTokenCount = estimateTokenCount(clause);
+        
+        if (clauseTokens + clauseTokenCount > targetTokenCount && clauseChunk.length > 0) {
+          const chunkText = clauseChunk.join(', ');
+          chunks.push({
+            text: chunkText,
+            tokenCount: estimateTokenCount(chunkText),
+            pageNumber: metadata?.pageNumber,
+            metadata: { ...metadata },
+          });
+          clauseChunk = [clause];
+          clauseTokens = clauseTokenCount;
+        } else {
+          clauseChunk.push(clause);
+          clauseTokens += clauseTokenCount;
+        }
+      }
+
+      if (clauseChunk.length > 0) {
+        const chunkText = clauseChunk.join(', ');
+        chunks.push({
+          text: chunkText,
+          tokenCount: estimateTokenCount(chunkText),
+          pageNumber: metadata?.pageNumber,
+          metadata: { ...metadata },
+        });
+      }
+      continue;
+    }
+
+    // Check if adding this sentence would exceed target
+    if (currentTokenCount + sentenceTokens > targetTokenCount && currentChunk.length > 0) {
+      // Save current chunk
+      const chunkText = currentChunk.join(' ');
+      chunks.push({
+        text: chunkText,
+        tokenCount: estimateTokenCount(chunkText),
+        pageNumber: metadata?.pageNumber,
+        metadata: { ...metadata },
+      });
+
+      // Start new chunk with overlap
+      if (overlapTokens > 0) {
+        // Find sentences that fit within overlap budget
+        const overlapChunk: string[] = [];
+        let overlapTokenCount = 0;
+        
+        for (let i = currentChunk.length - 1; i >= 0; i--) {
+          const s = currentChunk[i];
+          const sTokens = estimateTokenCount(s);
+          if (overlapTokenCount + sTokens <= overlapTokens) {
+            overlapChunk.unshift(s);
+            overlapTokenCount += sTokens;
+          } else {
+            break;
+          }
+        }
+        
+        currentChunk = [...overlapChunk, sentence];
+        currentTokenCount = overlapTokenCount + sentenceTokens;
+      } else {
+        currentChunk = [sentence];
+        currentTokenCount = sentenceTokens;
+      }
+    } else {
+      currentChunk.push(sentence);
+      currentTokenCount += sentenceTokens;
+    }
+  }
+
+  // Don't forget the last chunk
+  if (currentChunk.length > 0) {
+    const chunkText = currentChunk.join(' ');
+    chunks.push({
+      text: chunkText,
+      tokenCount: estimateTokenCount(chunkText),
+      pageNumber: metadata?.pageNumber,
+      metadata: { ...metadata },
+    });
+  }
+
+  return chunks;
+}
+
+/**
+ * Chunk a document into smaller pieces.
+ * Processes the document text and creates chunks with proper metadata.
+ */
+export function chunkDocument(
+  documentId: string,
+  text: string,
+  options: {
+    chunkSize?: number;
+    chunkOverlap?: number;
+    fileName?: string;
+    metadata?: DocumentMetadata;
+    pageTexts?: string[]; // Optional: array of page texts for page number tracking
+  } = {}
+): Chunk[] {
+  const {
+    chunkSize = 512,
+    chunkOverlap = 50,
+    fileName,
+    metadata,
+    pageTexts,
+  } = options;
+
+  const chunks: Chunk[] = [];
+  
+  if (pageTexts && pageTexts.length > 0) {
+    // Process page by page for page number tracking
+    let globalPosition = 0;
+    
+    for (let pageNum = 0; pageNum < pageTexts.length; pageNum++) {
+      const pageText = pageTexts[pageNum];
+      if (!pageText.trim()) continue;
+
+      const pageChunks = chunkText(pageText, chunkSize, chunkOverlap, {
+        pageNumber: pageNum + 1,
+        fileName,
+        source: fileName,
+      });
+
+      for (const chunk of pageChunks) {
+        chunks.push({
+          ...chunk,
+          id: uuidv4(),
+          documentId,
+          position: globalPosition++,
+        });
+      }
+    }
+  } else {
+    // Process entire text as one
+    const rawChunks = chunkText(text, chunkSize, chunkOverlap, {
+      fileName,
+      source: fileName,
+    });
+
+    for (let i = 0; i < rawChunks.length; i++) {
+      chunks.push({
+        ...rawChunks[i],
+        id: uuidv4(),
+        documentId,
+        position: i,
+      });
+    }
+  }
+
+  // Link chunks (previous/next)
+  for (let i = 0; i < chunks.length; i++) {
+    if (i > 0) {
+      chunks[i].metadata.previousChunkId = chunks[i - 1].id;
+    }
+    if (i < chunks.length - 1) {
+      chunks[i].metadata.nextChunkId = chunks[i + 1].id;
+    }
+  }
+
+  return chunks;
+}
+
+/**
+ * Create a document with chunks from text content.
+ */
+export function createDocument(
+  text: string,
+  options: {
+    id?: string;
+    fileName?: string;
+    chunkSize?: number;
+    chunkOverlap?: number;
+    metadata?: DocumentMetadata;
+    pageTexts?: string[];
+  } = {}
+): Document {
+  const documentId = options.id || uuidv4();
+  const chunks = chunkDocument(documentId, text, {
+    chunkSize: options.chunkSize || 512,
+    chunkOverlap: options.chunkOverlap || 50,
+    fileName: options.fileName,
+    metadata: options.metadata,
+    pageTexts: options.pageTexts,
+  });
+
+  const totalTokens = chunks.reduce((sum, c) => sum + c.tokenCount, 0);
+
+  return {
+    id: documentId,
+    fileName: options.fileName || 'unknown',
+    source: text,
+    metadata: {
+      ...options.metadata,
+      totalTokens,
+      totalChunks: chunks.length,
+    },
+    chunks,
+    indexed: false,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  };
+}
+
+/**
+ * Merge small consecutive chunks that are below minimum size.
+ * This helps prevent too many tiny chunks.
+ */
+export function mergeSmallChunks(
+  chunks: Chunk[],
+  minTokenCount: number = 100
+): Chunk[] {
+  if (chunks.length === 0) return chunks;
+
+  const merged: Chunk[] = [];
+  let current: Chunk | null = null;
+
+  for (const chunk of chunks) {
+    if (!current) {
+      current = { ...chunk };
+      continue;
+    }
+
+    if (current.tokenCount < minTokenCount) {
+      // Merge with next chunk
+      current = {
+        ...current,
+        text: current.text + ' ' + chunk.text,
+        tokenCount: estimateTokenCount(current.text + ' ' + chunk.text),
+        metadata: {
+          ...current.metadata,
+          nextChunkId: chunk.metadata.nextChunkId,
+        },
+      };
+    } else {
+      merged.push(current);
+      current = { ...chunk };
+    }
+  }
+
+  if (current) {
+    merged.push(current);
+  }
+
+  // Re-link chunks
+  for (let i = 0; i < merged.length; i++) {
+    merged[i].position = i;
+    if (i > 0) {
+      merged[i].metadata.previousChunkId = merged[i - 1].id;
+    }
+    if (i < merged.length - 1) {
+      merged[i].metadata.nextChunkId = merged[i + 1].id;
+    }
+  }
+
+  return merged;
+}
