@@ -5,6 +5,11 @@ import { z } from 'zod';
 // ============================================================================
 
 /**
+ * Type of content in a chunk.
+ */
+export type ChunkType = 'text' | 'table' | 'image';
+
+/**
  * A single chunk of text from a document.
  * Chunks are ~512 tokens to prevent vector dilution.
  */
@@ -15,6 +20,7 @@ export interface Chunk {
   tokenCount: number;
   pageNumber?: number;
   position: number; // Position in the original document
+  chunkType: ChunkType; // Type of content: text, table, or image
   metadata: ChunkMetadata;
 }
 

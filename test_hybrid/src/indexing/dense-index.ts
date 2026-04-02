@@ -346,6 +346,7 @@ export class BGEM3EmbeddingProvider implements EmbeddingProvider {
     // Process each text individually using the HuggingFace Inference API
     for (const text of texts) {
       // Use the feature-extraction pipeline endpoint
+      // The API expects "inputs" as a string for feature extraction
       const response = await fetch(`${this.baseUrl}/models/${this.model}`, {
         method: 'POST',
         headers,
@@ -360,24 +361,26 @@ export class BGEM3EmbeddingProvider implements EmbeddingProvider {
       const data = await response.json();
       
       // Handle the response - extract embedding from response
-      // BGE-M3 returns a nested array structure: [[...embedding...]]
+      // BGE-M3 via HuggingFace returns a nested array structure
       if (Array.isArray(data)) {
-        if (Array.isArray(data[0])) {
-          // Check if it's a batch result (multiple texts) or single embedding
+        // For feature-extraction, the response is the embedding directly
+        // Shape can be: [embedding_dim] or [1, embedding_dim] or [seq_len, embedding_dim]
+        if (typeof data[0] === 'number') {
+          // Flat embedding: [1024]
+          embeddings.push(data as unknown as number[]);
+        } else if (Array.isArray(data[0])) {
           if (Array.isArray(data[0][0])) {
-            // Batch result: [[[...], [...], ...]] - take mean or first
-            // For single text, we get shape [1, seq_len, 1024]
-            // Mean pool across sequence dimension
+            // 3D: [1, seq_len, 1024] - mean pool across sequence
             const tokenEmbeddings = data[0] as number[][];
             const meanEmbedding = this.meanPool(tokenEmbeddings);
             embeddings.push(meanEmbedding);
           } else {
-            // Already pooled: [[...embedding...]]
-            embeddings.push(data[0]);
+            // 2D: [seq_len, 1024] - mean pool or take first (CLS token)
+            const tokenEmbeddings = data as number[][];
+            // For BGE models, we can use mean pooling or CLS token
+            const meanEmbedding = this.meanPool(tokenEmbeddings);
+            embeddings.push(meanEmbedding);
           }
-        } else if (typeof data[0] === 'number') {
-          // Flat array of numbers - this is the embedding
-          embeddings.push(data as unknown as number[]);
         }
       } else if (data.embeddings) {
         embeddings.push(data.embeddings[0]);

@@ -51,8 +51,9 @@ if (!envLoaded) {
   console.warn('Warning: No .env file found. Using system environment variables.');
 }
 import { createEmbeddingProvider, EmbeddingProvider } from '../indexing/dense-index.js';
-import { createDocument } from '../indexing/chunker.js';
+import { createDocument, createChunksFromExtractedContent } from '../indexing/chunker.js';
 import { createPersistentStore, PersistentStore } from '../store/index.js';
+import { createDefaultPDFExtractor, PDFExtractorClient } from '../extraction/index.js';
 
 // Parse command line arguments
 function parseArgs(): {
@@ -160,6 +161,72 @@ async function readFileContent(filePath: string): Promise<{ text: string; pageTe
   return { text };
 }
 
+/**
+ * Extract content from PDF using the PyMuPDF extraction server.
+ * This method extracts text, tables (as markdown), and images (with descriptions).
+ */
+async function extractPdfContent(
+  filePath: string,
+  extractor: PDFExtractorClient
+): Promise<{
+  contents: Array<{
+    type: 'text' | 'table' | 'image';
+    text: string;
+    page_number: number;
+    position: number;
+    metadata?: Record<string, unknown>;
+  }>;
+  totalPages: number;
+}> {
+  const absolutePath = path.resolve(filePath);
+
+  if (!fs.existsSync(absolutePath)) {
+    throw new Error(`File not found: ${absolutePath}`);
+  }
+
+  console.log('Extracting PDF content using PyMuPDF server...');
+  
+  // Check if extraction server is available
+  const isHealthy = await extractor.healthCheck();
+  if (!isHealthy) {
+    console.warn('PDF extraction server is not available. Falling back to pdf-parse.');
+    const { text, pageTexts } = await readFileContent(filePath);
+    // Convert to extracted content format
+    const contents = [{
+      type: 'text' as const,
+      text,
+      page_number: 1,
+      position: 0,
+    }];
+    return { contents, totalPages: pageTexts?.length || 1 };
+  }
+
+  try {
+    const result = await extractor.extractPdfFromPath(absolutePath);
+    
+    console.log(`Extracted ${result.contents.length} content pieces:`);
+    console.log(`  - Text blocks: ${result.metadata.text_count}`);
+    console.log(`  - Tables: ${result.metadata.table_count}`);
+    console.log(`  - Images: ${result.metadata.image_count}`);
+    
+    return {
+      contents: result.contents,
+      totalPages: result.total_pages,
+    };
+  } catch (error: any) {
+    console.error('PDF extraction error:', error.message);
+    console.warn('Falling back to pdf-parse...');
+    const { text, pageTexts } = await readFileContent(filePath);
+    const contents = [{
+      type: 'text' as const,
+      text,
+      page_number: 1,
+      position: 0,
+    }];
+    return { contents, totalPages: pageTexts?.length || 1 };
+  }
+}
+
 // Main function
 async function main() {
   const options = parseArgs();
@@ -192,35 +259,79 @@ async function main() {
   // Initialize store (loads existing data)
   await store.initialize();
 
-  // Read file
-  console.log('\nReading file...');
-  const { text, pageTexts } = await readFileContent(options.filePath);
-  console.log(`Total text length: ${text.length} characters`);
-
   // Extract document name
   const docName = options.name || path.basename(options.filePath);
   const docId = `doc_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 
-  // Create document with chunks
-  console.log('\nChunking document...');
-  const document = createDocument(text, {
-    id: docId,
-    fileName: docName,
-    chunkSize: options.chunkSize,
-    chunkOverlap: options.overlap,
-    pageTexts,
-  });
+  // Get file extension
+  const ext = path.extname(options.filePath).toLowerCase();
+  const isPdf = ext === '.pdf';
 
-  console.log(`Created ${document.chunks.length} chunks`);
+  // Create chunks based on file type
+  let chunks: import('../types/index.js').Chunk[];
+  let textCount = 0;
+  let tableCount = 0;
+  let imageCount = 0;
+
+  if (isPdf) {
+    // Use PyMuPDF extraction for PDFs (with tables and images)
+    console.log('\nExtracting PDF content...');
+    const pdfExtractor = createDefaultPDFExtractor();
+    
+    const { contents, totalPages } = await extractPdfContent(options.filePath, pdfExtractor);
+    console.log(`Total pages: ${totalPages}`);
+    
+    // Count content types
+    textCount = contents.filter(c => c.type === 'text').length;
+    tableCount = contents.filter(c => c.type === 'table').length;
+    imageCount = contents.filter(c => c.type === 'image').length;
+    
+    console.log(`Content extracted: ${textCount} text blocks, ${tableCount} tables, ${imageCount} images`);
+    
+    // Create chunks from extracted content
+    console.log('\nChunking document...');
+    chunks = createChunksFromExtractedContent(docId, contents, {
+      chunkSize: options.chunkSize,
+      chunkOverlap: options.overlap,
+      fileName: docName,
+    });
+  } else {
+    // Use regular text extraction for non-PDF files
+    console.log('\nReading file...');
+    const { text, pageTexts } = await readFileContent(options.filePath);
+    console.log(`Total text length: ${text.length} characters`);
+    
+    // Create document with chunks
+    console.log('\nChunking document...');
+    const document = createDocument(text, {
+      id: docId,
+      fileName: docName,
+      chunkSize: options.chunkSize,
+      chunkOverlap: options.overlap,
+      pageTexts,
+    });
+    
+    chunks = document.chunks;
+    textCount = chunks.length;
+  }
+
+  console.log(`Created ${chunks.length} chunks`);
+  
+  // Count chunk types
+  const textChunks = chunks.filter(c => c.chunkType === 'text').length;
+  const tableChunks = chunks.filter(c => c.chunkType === 'table').length;
+  const imageChunks = chunks.filter(c => c.chunkType === 'image').length;
+  console.log(`Chunk types: ${textChunks} text, ${tableChunks} table, ${imageChunks} image`);
 
   // Generate embeddings
   console.log('\nGenerating embeddings...');
   const startTime = Date.now();
   
   const embeddings: number[][] = [];
-  for (let i = 0; i < document.chunks.length; i++) {
-    const chunk = document.chunks[i];
-    console.log(`  Embedding chunk ${i + 1}/${document.chunks.length}...`);
+  for (let i = 0; i < chunks.length; i++) {
+    const chunk = chunks[i];
+    const chunkTypeLabel = chunk.chunkType || 'text';
+    console.log(`  Embedding chunk ${i + 1}/${chunks.length} [${chunkTypeLabel}]...`);
     const embedding = await embeddingProvider.embedSingle(chunk.text);
     embeddings.push(embedding);
   }
@@ -230,16 +341,26 @@ async function main() {
 
   // Store chunks with embeddings (persisted automatically)
   console.log('\nStoring chunks with embeddings...');
-  await store.addChunks(document.chunks, embeddings);
+  await store.addChunks(chunks, embeddings);
+  
+  // Calculate total tokens
+  const totalTokens = chunks.reduce((sum, c) => sum + c.tokenCount, 0);
   
   console.log('\n' + '='.repeat(60));
   console.log('Ingestion Complete');
   console.log('='.repeat(60));
   console.log(`Document ID: ${docId}`);
   console.log(`Document name: ${docName}`);
-  console.log(`Chunks created: ${document.chunks.length}`);
-  console.log(`Total tokens: ${document.metadata.totalTokens || 'N/A'}`);
+  console.log(`Chunks created: ${chunks.length}`);
+  console.log(`Total tokens: ${totalTokens}`);
   console.log(`Processing time: ${duration}ms`);
+  
+  if (isPdf) {
+    console.log(`\nContent breakdown:`);
+    console.log(`  Text blocks: ${textCount}`);
+    console.log(`  Tables: ${tableCount}`);
+    console.log(`  Images (with descriptions): ${imageCount}`);
+  }
   
   // Print stats
   const stats = await store.getStats();

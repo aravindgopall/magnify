@@ -135,6 +135,7 @@ async function loadIndex(dataDir: string): Promise<{
               text: chunkData.text,
               tokenCount: chunkData.tokenCount,
               position: chunkData.position,
+              chunkType: chunkData.chunkType || 'text',
               metadata: chunkData.metadata,
             });
             // Tuple format doesn't have embeddings in our case
@@ -146,6 +147,7 @@ async function loadIndex(dataDir: string): Promise<{
               text: item.text,
               tokenCount: item.tokenCount,
               position: item.position,
+              chunkType: item.chunkType || 'text',
               metadata: item.metadata,
             });
             

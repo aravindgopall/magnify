@@ -1,5 +1,5 @@
 import { v4 as uuidv4 } from 'uuid';
-import type { Chunk, ChunkMetadata, Document, DocumentMetadata } from '../types/index.js';
+import type { Chunk, ChunkMetadata, ChunkType, Document, DocumentMetadata } from '../types/index.js';
 
 /**
  * Simple tokenizer for estimating token count.
@@ -47,7 +47,8 @@ export function chunkText(
   text: string,
   targetTokenCount: number = 512,
   overlapTokens: number = 50,
-  metadata?: Partial<ChunkMetadata>
+  metadata?: Partial<ChunkMetadata>,
+  chunkType: ChunkType = 'text'
 ): Omit<Chunk, 'id' | 'documentId' | 'position'>[] {
   const sentences = splitIntoSentences(text);
   const chunks: Omit<Chunk, 'id' | 'documentId' | 'position'>[] = [];
@@ -68,6 +69,7 @@ export function chunkText(
           text: chunkText,
           tokenCount: estimateTokenCount(chunkText),
           pageNumber: metadata?.pageNumber,
+          chunkType,
           metadata: {
             ...metadata,
             heading: metadata?.heading,
@@ -91,6 +93,7 @@ export function chunkText(
             text: chunkText,
             tokenCount: estimateTokenCount(chunkText),
             pageNumber: metadata?.pageNumber,
+            chunkType,
             metadata: { ...metadata },
           });
           clauseChunk = [clause];
@@ -107,6 +110,7 @@ export function chunkText(
           text: chunkText,
           tokenCount: estimateTokenCount(chunkText),
           pageNumber: metadata?.pageNumber,
+          chunkType,
           metadata: { ...metadata },
         });
       }
@@ -121,6 +125,7 @@ export function chunkText(
         text: chunkText,
         tokenCount: estimateTokenCount(chunkText),
         pageNumber: metadata?.pageNumber,
+        chunkType,
         metadata: { ...metadata },
       });
 
@@ -160,6 +165,7 @@ export function chunkText(
       text: chunkText,
       tokenCount: estimateTokenCount(chunkText),
       pageNumber: metadata?.pageNumber,
+      chunkType,
       metadata: { ...metadata },
     });
   }
@@ -284,6 +290,111 @@ export function createDocument(
     createdAt: new Date(),
     updatedAt: new Date(),
   };
+}
+
+/**
+ * Create a single chunk from extracted content (table, image, or text).
+ * Tables and images are kept as single chunks to preserve their structure.
+ */
+export function createChunkFromContent(
+  documentId: string,
+  content: {
+    type: ChunkType;
+    text: string;
+    page_number: number;
+    position: number;
+    metadata?: Record<string, unknown>;
+  },
+  options: {
+    fileName?: string;
+  } = {}
+): Chunk {
+  return {
+    id: uuidv4(),
+    documentId,
+    text: content.text,
+    tokenCount: estimateTokenCount(content.text),
+    pageNumber: content.page_number,
+    position: content.position,
+    chunkType: content.type,
+    metadata: {
+      fileName: options.fileName,
+      source: options.fileName,
+      pageNumber: content.page_number,
+      chunkType: content.type,
+      ...content.metadata,
+    },
+  };
+}
+
+/**
+ * Create chunks from extracted PDF content.
+ * Handles text, tables, and images differently:
+ * - Text: Split into chunks by sentence boundaries
+ * - Tables: Keep as single chunks (markdown format)
+ * - Images: Keep as single chunks (description text)
+ */
+export function createChunksFromExtractedContent(
+  documentId: string,
+  extractedContent: Array<{
+    type: ChunkType;
+    text: string;
+    page_number: number;
+    position: number;
+    metadata?: Record<string, unknown>;
+  }>,
+  options: {
+    chunkSize?: number;
+    chunkOverlap?: number;
+    fileName?: string;
+  } = {}
+): Chunk[] {
+  const { chunkSize = 512, chunkOverlap = 50, fileName } = options;
+  const chunks: Chunk[] = [];
+  let globalPosition = 0;
+
+  for (const content of extractedContent) {
+    if (content.type === 'text') {
+      // For text content, apply regular chunking
+      const textChunks = chunkText(
+        content.text,
+        chunkSize,
+        chunkOverlap,
+        {
+          pageNumber: content.page_number,
+          fileName,
+          source: fileName,
+        },
+        'text'
+      );
+
+      for (const chunk of textChunks) {
+        chunks.push({
+          ...chunk,
+          id: uuidv4(),
+          documentId,
+          position: globalPosition++,
+        });
+      }
+    } else {
+      // For tables and images, keep as single chunks
+      const chunk = createChunkFromContent(documentId, content, { fileName });
+      chunk.position = globalPosition++;
+      chunks.push(chunk);
+    }
+  }
+
+  // Link chunks (previous/next)
+  for (let i = 0; i < chunks.length; i++) {
+    if (i > 0) {
+      chunks[i].metadata.previousChunkId = chunks[i - 1].id;
+    }
+    if (i < chunks.length - 1) {
+      chunks[i].metadata.nextChunkId = chunks[i + 1].id;
+    }
+  }
+
+  return chunks;
 }
 
 /**

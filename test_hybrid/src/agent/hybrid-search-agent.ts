@@ -345,18 +345,33 @@ Synthesize your answer based on the evidence above. Cite chunks using [Chunk X] 
     
     // Reset and prompt the synthesis agent
     this.synthesisAgent.reset();
-    await this.synthesisAgent.prompt(synthesisPrompt);
-    await this.synthesisAgent.waitForIdle();
+    
+    try {
+      await this.synthesisAgent.prompt(synthesisPrompt);
+      await this.synthesisAgent.waitForIdle();
+    } catch (error) {
+      console.error('[HybridSearchAgent] Synthesis error:', error);
+      return { answer: `Error generating answer: ${error instanceof Error ? error.message : String(error)}` };
+    }
 
     // Extract the answer
     const messages = this.synthesisAgent.state.messages;
+    console.log(`[HybridSearchAgent] Synthesis messages: ${messages.length}`);
+    
     const lastMessage = messages[messages.length - 1];
 
-    if (!lastMessage || lastMessage.role !== 'assistant') {
-      return { answer: 'Failed to generate an answer. Please try again.' };
+    if (!lastMessage) {
+      console.error('[HybridSearchAgent] No messages in response');
+      return { answer: 'Failed to generate an answer - no response from model.' };
     }
 
     const answer = this.extractTextFromMessage(lastMessage);
+    
+    if (!answer || answer.trim().length === 0) {
+      console.error('[HybridSearchAgent] Empty answer extracted');
+      console.log('[HybridSearchAgent] Last message:', JSON.stringify(lastMessage, null, 2));
+      return { answer: 'The model returned an empty response. The relevant chunks were found but no answer was generated.' };
+    }
     
     // Log LLM interaction
     if (this.logger) {

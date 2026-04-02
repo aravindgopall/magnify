@@ -4,6 +4,7 @@
 # Web framework
 fastapi>=0.100.0
 uvicorn>=0.23.0
+python-multipart>=0.0.6
 
 # Embedding model
 sentence-transformers>=2.2.0
@@ -12,3 +13,12 @@ sentence-transformers>=2.2.0
 # For Apple Silicon Macs, torch uses MPS backend
 # For CUDA GPUs, torch uses CUDA backend
 torch>=2.0.0
+
+# PDF extraction (PyMuPDF)
+pymupdf>=1.23.0
+
+# Image processing
+pillow>=10.0.0
+
+# HTTP client for vision API
+httpx>=0.25.0
