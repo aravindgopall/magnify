@@ -14,7 +14,6 @@ import type {
 import { DEFAULT_HYBRID_SEARCH_CONFIG } from '../types/index.js';
 import type { HybridIndexer } from '../indexing/hybrid-index.js';
 import type { Reranker } from '../search/reranker.js';
-import { estimateTokenCount } from '../indexing/chunker.js';
 import type { SessionLogger, SearchLogEntry } from '../logger/index.js';
 
 // Initialize model registry
@@ -40,8 +39,7 @@ function getGridModel(): Model<'openai-completions'> {
  * 2. Executes hybrid search (dense + sparse + RRF fusion)
  * 3. Reranks results
  * 4. Reads and evaluates chunks
- * 5. Prunes irrelevant chunks
- * 6. Decides whether to hop (search again) or terminate
+ * 5. Decides whether to hop (search again) or terminate
  */
 export class RetrievalSubagent {
   private id: string;
@@ -67,7 +65,7 @@ export class RetrievalSubagent {
     this.logger = logger || null;
     this.subagentIndex = subagentIndex ?? 0;
 
-    // Initialize state
+    // Initialize state (no pruning, no token budget)
     this.state = {
       id: this.id,
       status: 'idle',
@@ -75,13 +73,10 @@ export class RetrievalSubagent {
       subQueries: [],
       retrievedChunks: [],
       curatedChunks: [],
-      prunedChunkIds: new Set(),
       hopCount: 0,
       maxHops: this.config.maxHops,
       memory: {
         contextChunks: new Map(),
-        tokenBudget: this.config.tokenBudget,
-        tokensUsed: 0,
         relevantFindings: [],
       },
     };
@@ -117,14 +112,12 @@ Your role is to:
 When evaluating chunks:
 - Consider both semantic relevance and keyword matches
 - Prioritize chunks that directly answer the query
-- Mark chunks as irrelevant if they don't contain useful information
 - Consider whether you have enough information to answer the query
 
 Response format:
 - First, briefly analyze what information you have and what's missing
 - Then provide your decision: CONTINUE (need more info) or TERMINATE (have enough info)
-- If CONTINUE, suggest a follow-up search query
-- List the chunk IDs you want to KEEP or PRUNE`;
+- If CONTINUE, suggest a follow-up search query`;
   }
 
   /**
@@ -166,11 +159,8 @@ Response format:
 
       this.state.status = 'completed';
       
-      // Always finalize curated chunks (non-pruned chunks)
-      if (this.state.curatedChunks.length === 0) {
-        this.state.curatedChunks = this.state.retrievedChunks
-          .filter((c) => !this.state.prunedChunkIds.has(c.chunkId));
-      }
+      // Finalize curated chunks (all retrieved chunks, no pruning)
+      this.state.curatedChunks = this.state.retrievedChunks;
       
       return {
         agentId: this.id,
@@ -178,7 +168,7 @@ Response format:
         curatedChunks: this.state.curatedChunks,
         relevantFindings: this.state.memory.relevantFindings,
         hopCount: this.state.hopCount,
-        tokensUsed: this.state.memory.tokensUsed,
+        tokensUsed: 0, // No token tracking
         duration: Date.now() - startTime,
       };
     } catch (error) {
@@ -188,10 +178,10 @@ Response format:
       return {
         agentId: this.id,
         status: 'failed',
-        curatedChunks: [],
+        curatedChunks: this.state.retrievedChunks, // Return whatever we have
         relevantFindings: [],
         hopCount: this.state.hopCount,
-        tokensUsed: this.state.memory.tokensUsed,
+        tokensUsed: 0,
         duration: Date.now() - startTime,
         error: this.state.error,
       };
@@ -218,16 +208,17 @@ Response format:
 
     // Check for question words that might indicate multiple questions
     const questionWords = ['what', 'how', 'why', 'when', 'where', 'who', 'which'];
-    const lowerQuery = query.toLowerCase();
-    let questionCount = 0;
     for (const word of questionWords) {
       const regex = new RegExp(`\\b${word}\\b`, 'gi');
       const matches = query.match(regex);
-      if (matches) questionCount += matches.length;
+      if (matches && matches.length > 1) {
+        // Multiple question words - decomposition is valid
+        break;
+      }
     }
 
-    // If multiple questions, the original decomposition is fine
-    return [...new Set(subQueries)]; // Deduplicate
+    // Deduplicate
+    return [...new Set(subQueries)];
   }
 
   /**
@@ -263,34 +254,28 @@ Response format:
       shouldTerminate: false,
     };
 
-    // Read top chunks into memory
-    await this.readChunksIntoMemory();
+    // Read top chunks into memory (no budget limit)
+    this.readChunksIntoMemory();
 
     // Assess what we know and what's missing
     observation.currentKnowledge = this.assessCurrentKnowledge();
     
-    // Evaluate chunk quality
-    // Use lower thresholds for BM25-only mode (when dense embeddings are zeros)
+    // Evaluate chunk quality (for information only, no pruning)
     const isBM25Only = this.state.retrievedChunks.some(c => c.rerankScore < 0.1);
     const relevantThreshold = isBM25Only ? 0.3 : 0.7;
     const partialThreshold = isBM25Only ? 0.1 : 0.4;
     
     for (const chunk of this.state.retrievedChunks) {
-      if (this.state.prunedChunkIds.has(chunk.chunkId)) {
-        observation.chunkQuality.set(chunk.chunkId, 'irrelevant');
-      } else if (chunk.rerankScore > relevantThreshold) {
+      if (chunk.rerankScore > relevantThreshold) {
         observation.chunkQuality.set(chunk.chunkId, 'relevant');
       } else if (chunk.rerankScore > partialThreshold) {
         observation.chunkQuality.set(chunk.chunkId, 'partial');
       } else {
-        // For BM25-only, don't mark as irrelevant based on low rerank score
-        // The chunk was retrieved by BM25, so it has some relevance
         observation.chunkQuality.set(chunk.chunkId, isBM25Only ? 'partial' : 'irrelevant');
       }
     }
 
     // Determine if we need to hop
-    // In BM25-only mode, count 'partial' as relevant since we rely on keyword matching
     const relevantCount = Array.from(observation.chunkQuality.values())
       .filter((q) => isBM25Only ? (q === 'relevant' || q === 'partial') : q === 'relevant').length;
     
@@ -301,19 +286,11 @@ Response format:
   }
 
   /**
-   * Read chunks into memory (context window).
+   * Read chunks into memory (context window) - no token budget.
    */
-  private async readChunksIntoMemory(): Promise<void> {
+  private readChunksIntoMemory(): void {
     for (const chunk of this.state.retrievedChunks) {
-      if (this.state.prunedChunkIds.has(chunk.chunkId)) continue;
-      
-      const chunkTokens = estimateTokenCount(chunk.text);
-      
-      // Check if we have room in the token budget
-      if (this.state.memory.tokensUsed + chunkTokens <= this.state.memory.tokenBudget) {
-        this.state.memory.contextChunks.set(chunk.chunkId, chunk.text);
-        this.state.memory.tokensUsed += chunkTokens;
-      }
+      this.state.memory.contextChunks.set(chunk.chunkId, chunk.text);
     }
   }
 
@@ -322,7 +299,7 @@ Response format:
    */
   private assessCurrentKnowledge(): string {
     const relevantChunks = this.state.retrievedChunks
-      .filter((c) => !this.state.prunedChunkIds.has(c.chunkId) && c.rerankScore > 0.5)
+      .filter((c) => c.rerankScore > 0.5)
       .slice(0, 5);
 
     if (relevantChunks.length === 0) {
@@ -341,14 +318,6 @@ Response format:
     // Simple heuristic-based reasoning
     // In production, this would use the LLM agent for more sophisticated reasoning
 
-    // Identify irrelevant chunks to prune
-    const chunksToPrune: string[] = [];
-    for (const [chunkId, quality] of observation.chunkQuality) {
-      if (quality === 'irrelevant') {
-        chunksToPrune.push(chunkId);
-      }
-    }
-
     // Check if we should terminate
     if (observation.shouldTerminate) {
       return {
@@ -364,14 +333,6 @@ Response format:
       return {
         type: 'hop',
         newQuery,
-      };
-    }
-
-    // Default: prune irrelevant chunks and continue
-    if (chunksToPrune.length > 0) {
-      return {
-        type: 'prune',
-        chunkIds: chunksToPrune,
       };
     }
 
@@ -419,14 +380,6 @@ Response format:
         await this.executeSearch();
         return true;
 
-      case 'prune':
-        for (const chunkId of action.chunkIds) {
-          this.state.prunedChunkIds.add(chunkId);
-          this.state.memory.contextChunks.delete(chunkId);
-        }
-        console.log(`[Subagent ${this.id}] Pruned ${action.chunkIds.length} chunks`);
-        return true;
-
       case 'hop':
         console.log(`[Subagent ${this.id}] New query: ${action.newQuery}`);
         this.state.subQueries.push(action.newQuery);
@@ -434,9 +387,8 @@ Response format:
         return true;
 
       case 'terminate':
-        // Finalize curated chunks
-        this.state.curatedChunks = this.state.retrievedChunks
-          .filter((c) => !this.state.prunedChunkIds.has(c.chunkId));
+        // Finalize curated chunks (all retrieved, no pruning)
+        this.state.curatedChunks = this.state.retrievedChunks;
         
         // Extract relevant findings
         this.state.memory.relevantFindings = this.state.curatedChunks

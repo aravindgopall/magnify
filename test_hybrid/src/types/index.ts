@@ -131,7 +131,6 @@ export interface SubagentState {
   subQueries: string[];
   retrievedChunks: RerankedResult[];
   curatedChunks: RerankedResult[];
-  prunedChunkIds: Set<string>;
   hopCount: number;
   maxHops: number;
   memory: SubagentMemory;
@@ -143,8 +142,6 @@ export interface SubagentState {
  */
 export interface SubagentMemory {
   contextChunks: Map<string, string>; // chunkId -> text
-  tokenBudget: number;
-  tokensUsed: number;
   relevantFindings: string[];
 }
 
@@ -170,7 +167,6 @@ export type AgentAction =
   | { type: 'decompose'; query: string }
   | { type: 'search'; query: string; subQueries: string[] }
   | { type: 'read'; chunkIds: string[] }
-  | { type: 'prune'; chunkIds: string[] }
   | { type: 'hop'; newQuery: string }
   | { type: 'terminate'; reason: string };
 
@@ -263,13 +259,6 @@ export const SearchCorpusToolSchema = z.object({
 
 export type SearchCorpusToolParams = z.infer<typeof SearchCorpusToolSchema>;
 
-export const PruneChunksToolSchema = z.object({
-  chunkIds: z.array(z.string()).describe('Chunk IDs to remove from context'),
-  reason: z.string().optional().describe('Reason for pruning'),
-});
-
-export type PruneChunksToolParams = z.infer<typeof PruneChunksToolSchema>;
-
 export const ReadChunksToolSchema = z.object({
   chunkIds: z.array(z.string()).describe('Chunk IDs to read into context'),
 });
@@ -335,7 +324,6 @@ export interface HybridSearchConfig {
   rerankTopK: number; // Top K after reranking
   subagentCount: number; // Number of parallel subagents
   maxHops: number; // Maximum multi-hop iterations
-  tokenBudget: number; // Token budget per subagent
   embeddingModel: string;
   embeddingDimensions: number;
   bm25K1: number;
@@ -350,7 +338,6 @@ export const DEFAULT_HYBRID_SEARCH_CONFIG: HybridSearchConfig = {
   rerankTopK: 20,
   subagentCount: 4,
   maxHops: 3,
-  tokenBudget: 8000,
   embeddingModel: 'BAAI/bge-m3',
   embeddingDimensions: 1024,
   bm25K1: 1.5,
