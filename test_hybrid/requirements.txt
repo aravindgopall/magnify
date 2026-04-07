@@ -9,6 +9,10 @@ python-multipart>=0.0.6
 # Embedding model
 sentence-transformers>=2.2.0
 
+# FlagEmbedding for BGE-M3 (dense + sparse embeddings)
+# Provides official BGE-M3 implementation with dense, sparse, and ColBERT vectors
+FlagEmbedding>=1.2.0
+
 # PyTorch (will be installed automatically with sentence-transformers)
 # For Apple Silicon Macs, torch uses MPS backend
 # For CUDA GPUs, torch uses CUDA backend
