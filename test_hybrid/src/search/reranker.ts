@@ -11,7 +11,7 @@ export interface Reranker {
 /**
  * Simple similarity-based reranker.
  * Uses term overlap and length normalization as a lightweight reranking method.
- * For production, replace with actual cross-encoder model.
+ * Used as fallback when cross-encoder is unavailable.
  */
 export class SimpleReranker implements Reranker {
   /**
@@ -110,16 +110,20 @@ export class SimpleReranker implements Reranker {
 }
 
 /**
- * LLM-based reranker that uses an LLM to score relevance.
- * More accurate but slower than simple reranking.
+ * Cross-Encoder reranker using HuggingFace models.
+ * Uses ms-marco-MiniLM-L-6-v for high-quality reranking.
+ * Cross-encoders provide more accurate relevance scoring by processing
+ * query-document pairs together (unlike bi-encoders that process separately).
  */
-export class LLMReranker implements Reranker {
-  private llmClient: {
-    complete: (prompt: string) => Promise<string>;
-  };
+export class CrossEncoderReranker implements Reranker {
+  private model: string;
+  private apiUrl: string;
+  private apiKey: string | undefined;
 
-  constructor(llmClient: { complete: (prompt: string) => Promise<string> }) {
-    this.llmClient = llmClient;
+  constructor(options?: { model?: string; apiKey?: string }) {
+    this.model = options?.model || 'cross-encoder/ms-marco-MiniLM-L-6-v';
+    this.apiKey = options?.apiKey || process.env.HUGGINGFACE_API_KEY;
+    this.apiUrl = `https://api-inference.huggingface.co/pipeline/reranking/${this.model}`;
   }
 
   async rerank(
@@ -129,124 +133,77 @@ export class LLMReranker implements Reranker {
   ): Promise<RerankedResult[]> {
     if (results.length === 0) return [];
 
-    // Batch rerank for efficiency
-    const rerankPromises = results.map(async (result, index) => {
-      const score = await this.scoreRelevance(query, result.text);
-      return {
-        ...result,
-        rerankScore: score,
-        finalRank: index + 1,
-      };
-    });
-
-    const reranked = await Promise.all(rerankPromises);
-
-    // Sort by rerank score descending
-    reranked.sort((a, b) => b.rerankScore - a.rerankScore);
-
-    // Assign final ranks
-    for (let i = 0; i < reranked.length; i++) {
-      reranked[i].finalRank = i + 1;
-    }
-
-    return reranked.slice(0, topK);
-  }
-
-  private async scoreRelevance(query: string, document: string): Promise<number> {
-    const prompt = `Rate the relevance of this document excerpt to the query on a scale of 0 to 1.
-
-Query: ${query}
-
-Document excerpt: ${document.slice(0, 1000)}
-
-Respond with ONLY a number between 0 and 1, nothing else.`;
+    const documents = results.map((r) => r.text);
 
     try {
-      const response = await this.llmClient.complete(prompt);
-      const score = parseFloat(response.trim());
-      return isNaN(score) ? 0.5 : Math.max(0, Math.min(1, score));
-    } catch {
-      return 0.5;
+      const response = await fetch(this.apiUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(this.apiKey ? { Authorization: `Bearer ${this.apiKey}` } : {}),
+        },
+        body: JSON.stringify({
+          query,
+          documents,
+          top_k: Math.min(topK, results.length),
+        }),
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error(`[CrossEncoderReranker] API error: ${response.status} ${errorText}`);
+        // Fallback to simple reranking on error
+        return this.fallbackRerank(query, results, topK);
+      }
+
+      const data = await response.json();
+      
+      // HuggingFace reranking API returns: [{ corpus_id: number, score: number, text: string }]
+      if (!Array.isArray(data)) {
+        console.error('[CrossEncoderReranker] Unexpected response format:', data);
+        return this.fallbackRerank(query, results, topK);
+      }
+
+      const reranked: RerankedResult[] = data.map((item: any, index: number) => {
+        const originalResult = results[item.corpus_id];
+        return {
+          ...originalResult,
+          rerankScore: item.score,
+          finalRank: index + 1,
+        };
+      });
+
+      return reranked;
+    } catch (error) {
+      console.error('[CrossEncoderReranker] Error:', error);
+      return this.fallbackRerank(query, results, topK);
     }
   }
-}
 
-/**
- * Cohere API reranker.
- * Uses Cohere's rerank API for high-quality reranking.
- */
-export class CohereReranker implements Reranker {
-  private apiKey: string;
-  private model: string;
-
-  constructor(apiKey: string, model: string = 'rerank-english-v2.0') {
-    this.apiKey = apiKey;
-    this.model = model;
-  }
-
-  async rerank(
+  /**
+   * Fallback to simple reranking if cross-encoder fails.
+   */
+  private async fallbackRerank(
     query: string,
     results: FusedResult[],
-    topK: number = 20
+    topK: number
   ): Promise<RerankedResult[]> {
-    if (results.length === 0) return [];
-
-    const response = await fetch('https://api.cohere.ai/v1/rerank', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${this.apiKey}`,
-      },
-      body: JSON.stringify({
-        model: this.model,
-        query,
-        documents: results.map((r) => r.text),
-        top_n: Math.min(topK, results.length),
-      }),
-    });
-
-    if (!response.ok) {
-      throw new Error(`Cohere rerank API error: ${await response.text()}`);
-    }
-
-    const data = await response.json();
-    
-    return data.results.map((item: any, index: number) => {
-      const originalResult = results[item.index];
-      return {
-        ...originalResult,
-        rerankScore: item.relevance_score,
-        finalRank: index + 1,
-      };
-    });
+    console.log('[CrossEncoderReranker] Using fallback simple reranker');
+    const simple = new SimpleReranker();
+    return simple.rerank(query, results, topK);
   }
 }
 
 /**
- * Create a reranker based on configuration.
+ * Create a cross-encoder reranker.
+ * This is the only reranker type used in production.
  */
 export function createReranker(options?: {
-  type?: 'simple' | 'llm' | 'cohere';
-  apiKey?: string;
   model?: string;
-  llmClient?: { complete: (prompt: string) => Promise<string> };
+  apiKey?: string;
 }): Reranker {
-  const type = options?.type || 'simple';
-
-  switch (type) {
-    case 'cohere':
-      if (!options?.apiKey) {
-        throw new Error('API key required for Cohere reranker');
-      }
-      return new CohereReranker(options.apiKey, options.model);
-
-    case 'llm':
-      if (!options?.llmClient) {
-        throw new Error('LLM client required for LLM reranker');
-      }
-      return new LLMReranker(options.llmClient);
-
-    default:
-      return new SimpleReranker();
-  }
+  return new CrossEncoderReranker({
+    model: options?.model,
+    apiKey: options?.apiKey,
+  });
 }
