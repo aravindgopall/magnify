@@ -20,13 +20,17 @@ import type { SessionLogger, SearchLogEntry } from '../logger/index.js';
 const authStorage = AuthStorage.create();
 const modelRegistry = new ModelRegistry(authStorage);
 
+// Get model names from environment variables
+const SUBAGENT_MODEL = process.env.SUBAGENT_MODEL || 'glm-latest';
+const SUBAGENT_PROVIDER = process.env.SUBAGENT_PROVIDER || 'grid';
+
 /**
- * Get the grid model from models.json
+ * Get the subagent model from models.json
  */
 function getGridModel(): Model<'openai-completions'> {
-  const model = modelRegistry.find('grid', 'glm-latest');
+  const model = modelRegistry.find(SUBAGENT_PROVIDER as any, SUBAGENT_MODEL);
   if (!model) {
-    throw new Error('Grid model "glm-latest" not found in ~/.pi/agent/models.json');
+    throw new Error(`${SUBAGENT_PROVIDER} model "${SUBAGENT_MODEL}" not found in ~/.pi/agent/models.json`);
   }
   return model as Model<'openai-completions'>;
 }
@@ -104,10 +108,16 @@ export class RetrievalSubagent {
     return `You are a retrieval subagent that helps find relevant information in documents.
 
 Your role is to:
-1. Analyze the user's query and identify key concepts
-2. Evaluate retrieved document chunks for relevance
-3. Determine if more information is needed (multi-hop)
-4. Curate a list of the most relevant chunks
+1. Break down the query into its key concepts
+2. Plan several distinct, non-overlapping search strategies that approach the question from different angles
+3. Execute searches and evaluate retrieved chunks
+4. Determine if more information is needed (multi-hop)
+5. Curate a list of the most relevant chunks
+
+IMPORTANT: Your search strategies should be diverse and explore different facets of the query.
+- Focus on different aspects, entities, or relationships in the query
+- Use different search terms and approaches
+- Avoid redundant searches that would find the same documents
 
 When evaluating chunks:
 - Consider both semantic relevance and keyword matches
@@ -223,6 +233,7 @@ Response format:
 
   /**
    * Execute hybrid search and reranking.
+   * Merges new results with existing chunks from previous hops, keeping the best score per chunk.
    */
   private async executeSearch(): Promise<void> {
     // Search with original query and sub-queries
@@ -233,13 +244,29 @@ Response format:
     );
 
     // Rerank results
-    this.state.retrievedChunks = await this.reranker.rerank(
+    const newChunks = await this.reranker.rerank(
       this.state.query,
       fusedResults,
       this.config.rerankTopK
     );
 
-    console.log(`[Subagent ${this.id}] Retrieved ${this.state.retrievedChunks.length} chunks`);
+    // Merge with existing chunks: keep best score per chunkId
+    const existingMap = new Map<string, RerankedResult>(
+      this.state.retrievedChunks.map(c => [c.chunkId, c])
+    );
+
+    for (const chunk of newChunks) {
+      const existing = existingMap.get(chunk.chunkId);
+      if (!existing || chunk.rerankScore > existing.rerankScore) {
+        existingMap.set(chunk.chunkId, chunk);
+      }
+    }
+
+    // Re-sort by rerank score and store
+    this.state.retrievedChunks = Array.from(existingMap.values())
+      .sort((a, b) => b.rerankScore - a.rerankScore);
+
+    console.log(`[Subagent ${this.id}] Retrieved ${newChunks.length} new chunks, total ${this.state.retrievedChunks.length} accumulated`);
   }
 
   /**
@@ -312,34 +339,118 @@ Response format:
   }
 
   /**
-   * Reason about the observation and decide on an action.
+   * Reason about the observation and decide on an action using LLM.
    */
   private async reason(observation: AgentObservation): Promise<AgentAction> {
-    // Simple heuristic-based reasoning
-    // In production, this would use the LLM agent for more sophisticated reasoning
+    // Build context for LLM decision
+    const topChunks = this.state.retrievedChunks
+      .slice(0, 10)
+      .map((c, i) => `[${i + 1}] Score: ${c.rerankScore.toFixed(3)}\n${c.text.slice(0, 300)}...`)
+      .join('\n\n');
 
-    // Check if we should terminate
-    if (observation.shouldTerminate) {
-      return {
-        type: 'terminate',
-        reason: 'Found sufficient relevant information or reached max hops',
-      };
-    }
+    const prompt = `Analyze the retrieved chunks and decide whether to CONTINUE searching or TERMINATE.
 
-    // Check if we should hop
-    if (observation.shouldHop) {
-      // Generate a follow-up query based on missing information
-      const newQuery = this.generateFollowUpQuery(observation);
+ORIGINAL QUERY: "${this.state.query}"
+
+HOP COUNT: ${this.state.hopCount}/${this.state.maxHops}
+
+RETRIEVED CHUNKS (${this.state.retrievedChunks.length} total):
+${topChunks}
+
+TASK:
+1. Evaluate if the chunks fully answer the query
+2. Identify what information is still missing (if any)
+3. Decide: TERMINATE if query is answered, CONTINUE if critical info is missing
+
+Respond in this EXACT format:
+DECISION: TERMINATE or CONTINUE
+REASON: <brief explanation>
+MISSING: <what's missing, if CONTINUE>
+FOLLOWUP_QUERY: <suggested search query, if CONTINUE>
+
+Examples:
+- Simple "What is X?" answered by 1 chunk → TERMINATE
+- Complex comparison needing more details → CONTINUE with targeted followup
+- Already searched 3 times → TERMINATE (max hops reached)`;
+
+    try {
+      this.agent.reset();
+      await this.agent.prompt(prompt);
+      await this.agent.waitForIdle();
+
+      const messages = this.agent.state.messages;
+      const lastMessage = messages[messages.length - 1];
+      const response = this.extractTextFromMessage(lastMessage);
+
+      console.log(`[Subagent ${this.id}] LLM decision: ${response.slice(0, 200)}...`);
+
+      // Parse the response
+      const decisionMatch = response.match(/DECISION:\s*(TERMINATE|CONTINUE)/i);
+      const reasonMatch = response.match(/REASON:\s*(.+?)(?=\nMISSING:|FOLLOWUP_QUERY:|$)/is);
+      const followupMatch = response.match(/FOLLOWUP_QUERY:\s*(.+?)(?=\n|$)/is);
+
+      const decision = decisionMatch ? decisionMatch[1].toUpperCase() : 'TERMINATE';
+      const reason = reasonMatch ? reasonMatch[1].trim() : 'LLM evaluation completed';
+
+      if (decision === 'TERMINATE') {
+        return {
+          type: 'terminate',
+          reason,
+        };
+      }
+
+      // CONTINUE - generate follow-up query
+      const followupQuery = followupMatch
+        ? followupMatch[1].trim()
+        : this.generateFollowUpQuery(observation);
+
       return {
         type: 'hop',
-        newQuery,
+        newQuery: followupQuery,
+      };
+    } catch (error) {
+      console.error(`[Subagent ${this.id}] LLM reasoning failed, using heuristic:`, error);
+      
+      // Fallback to heuristic
+      if (observation.shouldTerminate) {
+        return {
+          type: 'terminate',
+          reason: 'Found sufficient relevant information or reached max hops',
+        };
+      }
+
+      if (observation.shouldHop) {
+        const newQuery = this.generateFollowUpQuery(observation);
+        return {
+          type: 'hop',
+          newQuery,
+        };
+      }
+
+      return {
+        type: 'terminate',
+        reason: 'Completed evaluation',
       };
     }
+  }
 
-    return {
-      type: 'terminate',
-      reason: 'Completed evaluation',
-    };
+  /**
+   * Extract text from a message (handles both string and array content).
+   */
+  private extractTextFromMessage(message: any): string {
+    if (typeof message.content === 'string') {
+      return message.content;
+    }
+
+    if (Array.isArray(message.content)) {
+      return message.content
+        .filter((c: any) => c.type === 'text')
+        .map((c: any) => c.text || '')
+        .filter(Boolean)
+        .join('\n');
+    }
+
+    return '';
   }
 
   /**

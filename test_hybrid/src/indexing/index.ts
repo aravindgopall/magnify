@@ -8,7 +8,6 @@ export {
 } from './chunker.js';
 
 export {
-  tokenize,
   BM25Indexer,
   createBM25Indexer,
 } from './bm25-index.js';
@@ -19,7 +18,8 @@ export {
   createDenseIndexer,
   EmbeddingProvider,
   MockEmbeddingProvider,
-  OpenAIEmbeddingProvider,
+  BGEM3EmbeddingProvider,
+  LocalBGEM3Provider,
   createEmbeddingProvider,
 } from './dense-index.js';
 

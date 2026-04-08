@@ -249,70 +249,12 @@ export class MockEmbeddingProvider implements EmbeddingProvider {
 }
 
 /**
- * OpenAI-compatible embedding provider.
- * This can be used with OpenAI, Azure OpenAI, or compatible APIs.
- */
-export class OpenAIEmbeddingProvider implements EmbeddingProvider {
-  private apiKey: string;
-  private model: string;
-  private dimensions: number;
-  private baseUrl: string;
-
-  constructor(options: {
-    apiKey: string;
-    model?: string;
-    dimensions?: number;
-    baseUrl?: string;
-  }) {
-    this.apiKey = options.apiKey;
-    this.model = options.model || 'text-embedding-3-small';
-    this.dimensions = options.dimensions || 1536;
-    this.baseUrl = options.baseUrl || 'https://api.openai.com/v1';
-  }
-
-  async embed(texts: string[]): Promise<number[][]> {
-    const response = await fetch(`${this.baseUrl}/embeddings`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${this.apiKey}`,
-      },
-      body: JSON.stringify({
-        input: texts,
-        model: this.model,
-        dimensions: this.dimensions,
-      }),
-    });
-
-    if (!response.ok) {
-      const error = await response.text();
-      throw new Error(`Embedding API error: ${error}`);
-    }
-
-    const data = await response.json();
-    return data.data
-      .sort((a: any, b: any) => a.index - b.index)
-      .map((item: any) => item.embedding);
-  }
-
-  async embedSingle(text: string): Promise<number[]> {
-    const embeddings = await this.embed([text]);
-    return embeddings[0];
-  }
-
-  getDimensions(): number {
-    return this.dimensions;
-  }
-
-  getModel(): string {
-    return this.model;
-  }
-}
-
-/**
  * BGE-M3 Embedding Provider using HuggingFace Inference API.
  * BGE-M3 is a powerful open-source embedding model with 1024 dimensions.
  * Model: https://huggingface.co/BAAI/bge-m3
+ * 
+ * Note: BGE-M3 is registered as a sentence-similarity pipeline on HuggingFace,
+ * so we use the explicit feature-extraction pipeline endpoint.
  */
 export class BGEM3EmbeddingProvider implements EmbeddingProvider {
   private apiKey: string;
@@ -329,7 +271,8 @@ export class BGEM3EmbeddingProvider implements EmbeddingProvider {
     this.apiKey = options.apiKey || '';
     this.model = options.model || 'BAAI/bge-m3';
     this.dimensions = options.dimensions || 1024;
-    this.baseUrl = options.baseUrl || 'https://router.huggingface.co/hf-inference';
+    // Use HuggingFace Inference Endpoints - new router format
+    this.baseUrl = options.baseUrl || 'https://router.huggingface.co/hf-inference/models';
   }
 
   async embed(texts: string[]): Promise<number[][]> {
@@ -343,47 +286,45 @@ export class BGEM3EmbeddingProvider implements EmbeddingProvider {
 
     const embeddings: number[][] = [];
     
-    // Process each text individually using the HuggingFace Inference API
+    // Process each text individually using the HuggingFace feature-extraction pipeline
     for (const text of texts) {
-      // Use the feature-extraction pipeline endpoint
-      // The API expects "inputs" as a string for feature extraction
-      const response = await fetch(`${this.baseUrl}/models/${this.model}`, {
+      const response = await fetch(`${this.baseUrl}/${this.model}`, {
         method: 'POST',
         headers,
-        body: JSON.stringify({ inputs: text }),
+        body: JSON.stringify({ 
+          inputs: text,
+          options: {
+            wait_for_model: true
+          }
+        }),
       });
 
       if (!response.ok) {
         const error = await response.text();
-        throw new Error(`BGE-M3 Embedding API error: ${error}`);
+        throw new Error(
+          `BGE-M3 Embedding API error: ${error}\n` +
+          `Try using --provider openai or --provider mock instead.`
+        );
       }
 
       const data = await response.json();
       
       // Handle the response - extract embedding from response
-      // BGE-M3 via HuggingFace returns a nested array structure
+      // BGE-M3 via feature-extraction returns embeddings in various shapes
       if (Array.isArray(data)) {
-        // For feature-extraction, the response is the embedding directly
-        // Shape can be: [embedding_dim] or [1, embedding_dim] or [seq_len, embedding_dim]
         if (typeof data[0] === 'number') {
           // Flat embedding: [1024]
           embeddings.push(data as unknown as number[]);
         } else if (Array.isArray(data[0])) {
           if (Array.isArray(data[0][0])) {
-            // 3D: [1, seq_len, 1024] - mean pool across sequence
+            // 3D: [1, seq_len, 1024] - take first or mean pool
             const tokenEmbeddings = data[0] as number[][];
-            const meanEmbedding = this.meanPool(tokenEmbeddings);
-            embeddings.push(meanEmbedding);
+            embeddings.push(this.meanPool(tokenEmbeddings));
           } else {
-            // 2D: [seq_len, 1024] - mean pool or take first (CLS token)
-            const tokenEmbeddings = data as number[][];
-            // For BGE models, we can use mean pooling or CLS token
-            const meanEmbedding = this.meanPool(tokenEmbeddings);
-            embeddings.push(meanEmbedding);
+            // 2D: [seq_len, 1024] - mean pool
+            embeddings.push(this.meanPool(data as number[][]));
           }
         }
-      } else if (data.embeddings) {
-        embeddings.push(data.embeddings[0]);
       } else {
         throw new Error(`Unexpected response format from BGE-M3 API: ${JSON.stringify(data).slice(0, 200)}`);
       }
@@ -430,8 +371,16 @@ export class BGEM3EmbeddingProvider implements EmbeddingProvider {
 }
 
 /**
- * Local BGE-M3 Embedding Provider using a custom inference server.
- * Use this when running BGE-M3 locally via FastAPI, Flask, etc.
+ * Local BGE-M3 Embedding Provider using the FlagEmbedding server.
+ * 
+ * This provider connects to a local embedding server that uses the official
+ * FlagEmbedding library for best results. The server provides both dense
+ * and sparse embeddings.
+ * 
+ * To start the server:
+ *   python scripts/embedding_server.py
+ * 
+ * The server runs on http://localhost:8002 by default.
  */
 export class LocalBGEM3Provider implements EmbeddingProvider {
   private baseUrl: string;
@@ -449,21 +398,29 @@ export class LocalBGEM3Provider implements EmbeddingProvider {
   }
 
   async embed(texts: string[]): Promise<number[][]> {
-    const response = await fetch(this.baseUrl, {
+    const response = await fetch(`${this.baseUrl}/embed`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ texts }),
+      body: JSON.stringify({ 
+        texts,
+        return_dense: true,
+        return_sparse: false,
+        return_colbert_vecs: false,
+      }),
     });
 
     if (!response.ok) {
       const error = await response.text();
-      throw new Error(`Local BGE-M3 API error: ${error}`);
+      throw new Error(
+        `Local BGE-M3 API error: ${error}\n` +
+        `Make sure the embedding server is running: python scripts/embedding_server.py`
+      );
     }
 
     const data = await response.json();
-    return data.embeddings || data;
+    return data.embeddings;
   }
 
   async embedSingle(text: string): Promise<number[]> {
@@ -481,40 +438,10 @@ export class LocalBGEM3Provider implements EmbeddingProvider {
 }
 
 /**
- * BM25-only embedding provider.
- * Returns zero vectors - used when only sparse search is needed.
- * This effectively disables dense vector search.
- */
-export class BM25OnlyProvider implements EmbeddingProvider {
-  private dimensions: number;
-
-  constructor(dimensions: number = 1024) {
-    this.dimensions = dimensions;
-  }
-
-  async embed(texts: string[]): Promise<number[][]> {
-    // Return zero vectors - dense search will be ignored
-    return texts.map(() => new Array(this.dimensions).fill(0));
-  }
-
-  async embedSingle(text: string): Promise<number[]> {
-    return new Array(this.dimensions).fill(0);
-  }
-
-  getDimensions(): number {
-    return this.dimensions;
-  }
-
-  getModel(): string {
-    return 'bm25-only';
-  }
-}
-
-/**
  * Create an embedding provider based on environment configuration.
  */
 export function createEmbeddingProvider(options?: {
-  type?: 'mock' | 'openai' | 'bge-m3' | 'local-bge-m3' | 'bm25-only';
+  type?: 'mock' | 'bge-m3' | 'local-bge-m3';
   apiKey?: string;
   model?: string;
   dimensions?: number;
@@ -523,17 +450,6 @@ export function createEmbeddingProvider(options?: {
   const type = options?.type || 'bge-m3';
 
   switch (type) {
-    case 'openai':
-      if (!options?.apiKey) {
-        throw new Error('API key is required for OpenAI embedding provider');
-      }
-      return new OpenAIEmbeddingProvider({
-        apiKey: options.apiKey,
-        model: options.model,
-        dimensions: options.dimensions,
-        baseUrl: options.baseUrl,
-      });
-
     case 'bge-m3':
       return new BGEM3EmbeddingProvider({
         apiKey: options?.apiKey,
@@ -551,9 +467,6 @@ export function createEmbeddingProvider(options?: {
         model: options.model,
         dimensions: options.dimensions,
       });
-
-    case 'bm25-only':
-      return new BM25OnlyProvider(options?.dimensions ?? 1024);
 
     case 'mock':
     default:

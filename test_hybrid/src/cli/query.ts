@@ -7,7 +7,7 @@
  *   tsx src/cli/query.ts "your question" [options]
  * 
  * Options:
- *   --provider <type>   Embedding provider: bge-m3 | local-bge-m3 | openai | mock
+ *   --provider <type>   Embedding provider: bge-m3 | local-bge-m3 | mock
  *   --data-dir <dir>    Data directory (default: ./data)
  *   --max-hops <n>      Maximum multi-hop iterations (default: 3)
  *   --subagents <n>     Number of parallel subagents (default: 4)
@@ -33,7 +33,7 @@ import { DEFAULT_HYBRID_SEARCH_CONFIG } from '../types/index.js';
 // Parse command line arguments
 function parseArgs(): {
   query: string;
-  provider: 'bge-m3' | 'local-bge-m3' | 'openai' | 'mock' | 'bm25-only';
+  provider: 'bge-m3' | 'local-bge-m3' | 'mock';
   dataDir: string;
   maxHops: number;
   subagents: number;
@@ -50,8 +50,9 @@ Arguments:
   "query"              Your question to search for
 
 Options:
-  --provider <type>    Embedding provider: bge-m3 | local-bge-m3 | openai | mock | bm25-only
-                       - bm25-only: Uses keyword search only (no embeddings needed)
+  --provider <type>    Embedding provider: bge-m3 | local-bge-m3 | mock
+                       - bge-m3: Uses BGE-M3 embeddings + BM25 hybrid search (default)
+                       - local-bge-m3: Uses local BGE-M3 server for embeddings
                        - mock: Random embeddings (for testing)
   --data-dir <dir>     Data directory (default: ./data)
   --max-hops <n>       Maximum multi-hop iterations (default: 3)
@@ -60,7 +61,7 @@ Options:
   --format <type>      Output format: text | json (default: text)
 
 Examples:
-  npm run query -- "What is the main topic of the document?" --provider bm25-only
+  npm run query -- "What is the main topic of the document?"
   npm run query -- "Summarize the key findings" --max-hops 5
   npm run query -- "What are the recommendations?" --format json
 `);
@@ -68,16 +69,18 @@ Examples:
   }
 
   let query = '';
-  let provider: 'bge-m3' | 'local-bge-m3' | 'openai' | 'mock' | 'bm25-only' = 'bm25-only';
-  let dataDir = './data';
-  let maxHops = 3;
-  let subagents = 4;
-  let topK = 50;
+  // Read provider from environment, default to bge-m3 if not set
+  let provider: 'bge-m3' | 'local-bge-m3' | 'mock' = 
+    (process.env.EMBEDDING_PROVIDER as 'bge-m3' | 'local-bge-m3' | 'mock') || 'bge-m3';
+  let dataDir = process.env.DATA_DIR || './data';
+  let maxHops = parseInt(process.env.MAX_HOPS || '3', 10);
+  let subagents = parseInt(process.env.SUBAGENT_COUNT || '4', 10);
+  let topK = parseInt(process.env.TOP_K_CANDIDATES || '50', 10);
   let format: 'text' | 'json' = 'text';
 
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--provider') {
-      provider = args[++i] as 'bge-m3' | 'local-bge-m3' | 'openai' | 'mock' | 'bm25-only';
+      provider = args[++i] as 'bge-m3' | 'local-bge-m3' | 'mock';
     } else if (args[i] === '--data-dir') {
       dataDir = args[++i];
     } else if (args[i] === '--max-hops') {
@@ -242,9 +245,9 @@ async function main() {
   // Create embedding provider
   const embeddingProvider = createEmbeddingProvider({
     type: options.provider,
-    apiKey: process.env.HUGGINGFACE_API_KEY || process.env.OPENAI_API_KEY,
+    apiKey: process.env.HUGGINGFACE_API_KEY,
     baseUrl: process.env.LOCAL_BGE_M3_URL,
-    dimensions: options.provider === 'openai' ? 1536 : 1024,
+    dimensions: 1024,  // BGE-M3 uses 1024 dimensions
   });
 
   // Create configuration

@@ -18,6 +18,7 @@ import base64
 import io
 import json
 import logging
+import os
 import re
 from pathlib import Path
 from typing import List, Optional, Dict, Any, Literal
@@ -26,6 +27,32 @@ import httpx
 import pymupdf
 from fastapi import FastAPI, HTTPException, UploadFile, File
 from pydantic import BaseModel
+
+# Load .env file from test_hybrid directory
+def load_env_file():
+    """Load environment variables from .env file."""
+    env_paths = [
+        Path(__file__).parent.parent / '.env',  # test_hybrid/.env
+        Path.cwd() / '.env',  # current working directory
+    ]
+    
+    for env_path in env_paths:
+        if env_path.exists():
+            with open(env_path) as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith('#') and '=' in line:
+                        key, value = line.split('=', 1)
+                        key = key.strip()
+                        value = value.strip().strip('"').strip("'")
+                        if key not in os.environ:
+                            os.environ[key] = value
+            logging.info(f"Loaded environment from: {env_path}")
+            return True
+    return False
+
+# Load .env before checking API keys
+load_env_file()
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -38,12 +65,28 @@ app = FastAPI(
     version="1.0.0",
 )
 
-# Vision model configuration
-VISION_MODEL = "kimi-latest"
-VISION_API_URL = "https://api.moonshot.cn/v1/chat/completions"  # Kimi API endpoint
-# Can be configured via environment variable - use GRID_API_KEY for both synthesis and vision
-import os
-VISION_API_KEY = os.environ.get("GRID_API_KEY", os.environ.get("KIMI_API_KEY", os.environ.get("MOONSHOT_API_KEY", "")))
+# Vision model configuration - ALL values must be set in .env file
+# Required: VISION_BASE_URL, VISION_MODEL, GRID_API_KEY
+
+VISION_BASE_URL = os.environ.get("VISION_BASE_URL", "")
+if not VISION_BASE_URL:
+    logger.error("VISION_BASE_URL not set in .env file - image descriptions will be disabled")
+
+VISION_API_URL = f"{VISION_BASE_URL}/chat/completions" if VISION_BASE_URL else ""
+
+VISION_MODEL = os.environ.get("VISION_MODEL", "")
+if not VISION_MODEL:
+    logger.error("VISION_MODEL not set in .env file - image descriptions will be disabled")
+
+VISION_API_KEY = os.environ.get("GRID_API_KEY", "")
+if not VISION_API_KEY:
+    logger.error("GRID_API_KEY not set in .env file - image descriptions will be disabled")
+
+# Log the configuration being used
+if VISION_BASE_URL and VISION_MODEL and VISION_API_KEY:
+    logger.info(f"Vision API configured: {VISION_MODEL} @ {VISION_BASE_URL}")
+else:
+    logger.warning("Vision API not fully configured - images will have placeholder descriptions")
 
 
 class ExtractedContent(BaseModel):

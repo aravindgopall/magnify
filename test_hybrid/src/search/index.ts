@@ -2,7 +2,6 @@
 export {
   Reranker,
   SimpleReranker,
-  LLMReranker,
-  CohereReranker,
+  CrossEncoderReranker,
   createReranker,
 } from './reranker.js';

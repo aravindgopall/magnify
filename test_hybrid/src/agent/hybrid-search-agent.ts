@@ -21,13 +21,31 @@ import { SessionLogger, createSessionLogger, type SessionLog } from '../logger/i
 const authStorage = AuthStorage.create();
 const modelRegistry = new ModelRegistry(authStorage);
 
+// Get model names from environment variables
+const SYNTHESIS_MODEL = process.env.SYNTHESIS_MODEL || 'glm-latest';
+const SYNTHESIS_PROVIDER = process.env.SYNTHESIS_PROVIDER || 'grid';
+const FLASH_MODEL = process.env.FLASH_MODEL || 'glm-flash-experimental';
+const FLASH_PROVIDER = process.env.FLASH_PROVIDER || 'grid';
+
 /**
- * Get the grid model from models.json
+ * Get the synthesis model from models.json
  */
 function getGridModel(): Model<'openai-completions'> {
-  const model = modelRegistry.find('grid', 'glm-latest');
+  const model = modelRegistry.find(SYNTHESIS_PROVIDER as any, SYNTHESIS_MODEL);
   if (!model) {
-    throw new Error('Grid model "glm-latest" not found in ~/.pi/agent/models.json');
+    throw new Error(`${SYNTHESIS_PROVIDER} model "${SYNTHESIS_MODEL}" not found in ~/.pi/agent/models.json`);
+  }
+  return model as Model<'openai-completions'>;
+}
+
+/**
+ * Get the fast flash model from models.json for decomposition.
+ */
+function getFlashModel(): Model<'openai-completions'> {
+  const model = modelRegistry.find(FLASH_PROVIDER as any, FLASH_MODEL);
+  if (!model) {
+    console.warn(`[HybridSearchAgent] ${FLASH_PROVIDER} model "${FLASH_MODEL}" not found, falling back to synthesis model`);
+    return getGridModel();
   }
   return model as Model<'openai-completions'>;
 }
@@ -37,16 +55,18 @@ function getGridModel(): Model<'openai-completions'> {
  * 
  * Architecture:
  * 1. Document Ingestion & Indexing (512-token chunks, dual dense/sparse indexing)
- * 2. Query Reception & Parallel Subagent Spawning (4 subagents)
- * 3. Observe-Reason-Act Loop (per subagent, with RRF fusion and reranking)
- * 4. Master RRF Fusion (aggregates all subagent results)
- * 5. Main Agent Synthesis (generates final answer)
+ * 2. LLM Query Decomposition (generates diverse subqueries)
+ * 3. Parallel Subagent Spawning (4 subagents with different queries)
+ * 4. Observe-Reason-Act Loop (per subagent, with RRF fusion and reranking)
+ * 5. Master RRF Fusion (aggregates all subagent results)
+ * 6. Main Agent Synthesis (generates final answer with section-grouped context)
  */
 export class HybridSearchAgent {
   private indexer: HybridIndexer;
   private reranker: Reranker;
   private config: HybridSearchConfig;
   private synthesisAgent: Agent;
+  private queryDecompositionAgent: Agent;
   private logger: SessionLogger | null = null;
   private logDir: string;
 
@@ -58,14 +78,14 @@ export class HybridSearchAgent {
   ) {
     this.config = { ...DEFAULT_HYBRID_SEARCH_CONFIG, ...config };
     this.indexer = indexer || createHybridIndexer(this.config);
-    this.reranker = reranker || createReranker({ type: 'simple' });
+    this.reranker = reranker || createReranker();
     this.logDir = logDir || './logs/sessions';
 
-    // Initialize synthesis agent
-    const model = getGridModel();
+    // Initialize synthesis agent with glm-latest (quality matters for final answer)
+    const synthesisModel = getGridModel();
     this.synthesisAgent = new Agent({
       initialState: {
-        model,
+        model: synthesisModel,
         thinkingLevel: 'off',
         tools: [],
         systemPrompt: this.buildSynthesisSystemPrompt(),
@@ -78,6 +98,86 @@ export class HybridSearchAgent {
         return apiKey;
       },
     });
+
+    // Initialize query decomposition agent with glm-flash-experimental (fast decomposition)
+    const flashModel = getFlashModel();
+    this.queryDecompositionAgent = new Agent({
+      initialState: {
+        model: flashModel,
+        thinkingLevel: 'off',
+        tools: [],
+        systemPrompt: this.buildQueryDecompositionSystemPrompt(),
+      },
+      getApiKey: async () => {
+        const apiKey = await authStorage.getApiKey('grid');
+        if (!apiKey) {
+          throw new Error('Grid API key not found');
+        }
+        return apiKey;
+      },
+    });
+  }
+
+  private buildQueryDecompositionSystemPrompt(): string {
+    return `You are a query decomposition expert. Your task is to break down a user's query into diverse subqueries for parallel document retrieval.
+
+Given a query, generate exactly 4 different search perspectives:
+
+1. **Main query**: The original query (possibly simplified)
+2. **Specific focus**: A more specific aspect or entity from the query
+3. **Broad context**: A broader, related search that provides context
+4. **Alternative angle**: A different perspective or related concept
+
+Rules:
+- Each subquery should search for different but relevant information
+- Keep subqueries concise (under 10 words when possible)
+- Preserve key technical terms and named entities
+- Ensure diversity in search angles
+- If the query is simple, create variations that explore related aspects
+
+Respond with ONLY a JSON array of 4 strings, no other text.
+Example: ["main query", "specific focus", "broad context", "alternative angle"]`;
+  }
+
+  /**
+   * Decompose a query into diverse subqueries using LLM.
+   */
+  private async decomposeQuery(query: string, subagentCount: number): Promise<string[]> {
+    console.log(`[HybridSearchAgent] Decomposing query into ${subagentCount} subqueries...`);
+    
+    this.queryDecompositionAgent.reset();
+    
+    const prompt = `Decompose this query into ${subagentCount} diverse search perspectives:
+
+Query: "${query}"
+
+Provide ${subagentCount} different subqueries that will help find comprehensive information. Respond with ONLY a JSON array.`;
+
+    try {
+      await this.queryDecompositionAgent.prompt(prompt);
+      await this.queryDecompositionAgent.waitForIdle();
+      
+      const messages = this.queryDecompositionAgent.state.messages;
+      const lastMessage = messages[messages.length - 1];
+      const response = this.extractTextFromMessage(lastMessage);
+      
+      // Parse JSON array from response
+      const jsonMatch = response.match(/\[[\s\S]*\]/);
+      if (jsonMatch) {
+        const subqueries = JSON.parse(jsonMatch[0]);
+        if (Array.isArray(subqueries) && subqueries.length > 0) {
+          console.log(`[HybridSearchAgent] Decomposed into: ${subqueries.join(', ')}`);
+          return subqueries.slice(0, subagentCount);
+        }
+      }
+      
+      // Fallback to original query
+      console.log('[HybridSearchAgent] Could not parse subqueries, using original query');
+      return Array(subagentCount).fill(query);
+    } catch (error) {
+      console.error('[HybridSearchAgent] Query decomposition failed:', error);
+      return Array(subagentCount).fill(query);
+    }
   }
 
   private buildSynthesisSystemPrompt(): string {
@@ -155,16 +255,19 @@ Guidelines:
 
     console.log(`[HybridSearchAgent] Processing query: "${query}"`);
 
-    // Step 1: Spawn parallel subagents
+    // Step 1: Decompose query into diverse subqueries using LLM
+    // Each subagent gets a DIFFERENT subquery for intentional diversity
     const subagentCount = options.subagentCount || this.config.subagentCount;
-    console.log(`[HybridSearchAgent] Spawning ${subagentCount} parallel subagents...`);
+    const subqueries = await this.decomposeQuery(query, subagentCount);
+    console.log(`[HybridSearchAgent] Spawning ${subagentCount} parallel subagents with diverse subqueries...`);
 
     const subagentPromises = Array.from({ length: subagentCount }, (_, i) => {
       const subagent = createRetrievalSubagent(this.indexer, this.reranker, {
         ...this.config,
         maxHops: options.maxHops ?? this.config.maxHops,
       }, this.logger, i);
-      return subagent.execute(query);
+      // Each subagent gets a DIFFERENT subquery for diverse search coverage
+      return subagent.execute(subqueries[i] || query);
     });
 
     // Wait for all subagents to complete (embarrassingly parallel)
@@ -310,6 +413,13 @@ Guidelines:
 
   /**
    * Synthesize the final answer from the master ranked chunks.
+   * 
+   * CRITICAL: Cross-encoder reranks against the ORIGINAL query before synthesis.
+   * This prevents the "high agreement but wrong answer" problem where chunks
+   * found by multiple subagents score highly by agreement but aren't relevant
+   * to the actual query.
+   * 
+   * Pipeline: Master RRF (top 50) → Cross-encoder rerank (top 15-20) → Synthesis
    */
   private async synthesizeAnswer(
     query: string,
@@ -320,25 +430,40 @@ Guidelines:
       return { answer: 'No relevant information found.' };
     }
 
-    // Build context from master ranked chunks
-    const contextSections = masterRankedChunks
-      .slice(0, 15) // Use top 15 chunks
-      .map((chunk, idx) => `[Chunk ${idx + 1}] (agreement: ${chunk.agreementCount})\n${chunk.text}`)
-      .join('\n\n---\n\n');
+    // Step 1: Take top 50 from master RRF
+    const candidatesForRerank = masterRankedChunks.slice(0, 50);
+    console.log(`[HybridSearchAgent] Cross-encoder reranking ${candidatesForRerank.length} chunks against original query...`);
+
+    // Step 2: Cross-encoder rerank against ORIGINAL query
+    const rerankStartTime = Date.now();
+    const rerankedChunks = await this.reranker.rerank(query, candidatesForRerank, 20);
+    const rerankTimeMs = Date.now() - rerankStartTime;
+    console.log(`[HybridSearchAgent] Cross-encoder rerank completed (${rerankTimeMs}ms), top ${rerankedChunks.length} chunks selected`);
+
+    // Merge rerank scores back with agreement data from original chunks
+    const chunkAgreementMap = new Map(masterRankedChunks.map(c => [c.chunkId, { agreementCount: c.agreementCount, sourceAgents: c.sourceAgents }]));
+    const rerankedWithAgreement: Array<RerankedResult & { agreementCount: number; sourceAgents: string[] }> = rerankedChunks.map(c => ({
+      ...c,
+      agreementCount: chunkAgreementMap.get(c.chunkId)?.agreementCount ?? 1,
+      sourceAgents: chunkAgreementMap.get(c.chunkId)?.sourceAgents ?? [],
+    }));
+
+    // Step 3: Group chunks by section/heading for structured context
+    const contextSections = this.buildStructuredContext(rerankedWithAgreement.slice(0, 20));
 
     const extractionType = options?.extractionType || 'full';
     const formatInstructions = this.getFormatInstructions(extractionType);
 
-    const synthesisPrompt = `Based on the following document chunks, synthesize an answer to the user's query.
+    const synthesisPrompt = `Based on the following document sections, synthesize an answer to the user's query.
 
 User Query: ${query}
 
 ${formatInstructions}
 
-Relevant Document Chunks (ranked by multi-source agreement):
+Document Context (organized by section):
 ${contextSections}
 
-Synthesize your answer based on the evidence above. Cite chunks using [Chunk X] notation.`;
+Synthesize your answer based on the evidence above. Cite sources using the section names and chunk numbers (e.g., [Introduction, Chunk 1]).`;
 
     // Log LLM interaction start
     const llmStartTime = Date.now();
@@ -378,8 +503,8 @@ Synthesize your answer based on the evidence above. Cite chunks using [Chunk X] 
       this.logger.startLLMInteraction();
       this.logger.logLLMInteraction({
         phase: 'synthesis',
-        model: 'glm-latest',
-        provider: 'grid',
+        model: SYNTHESIS_MODEL,
+        provider: SYNTHESIS_PROVIDER,
         prompt: {
           system: this.buildSynthesisSystemPrompt(),
           user: synthesisPrompt,
@@ -422,6 +547,48 @@ Synthesize your answer based on the evidence above. Cite chunks using [Chunk X] 
     }
 
     return '';
+  }
+
+  /**
+   * Build structured context by grouping chunks by section/heading.
+   * This preserves document structure for better synthesis.
+   */
+  private buildStructuredContext(
+    chunks: Array<RerankedResult & { agreementCount: number; sourceAgents: string[] }>
+  ): string {
+    // Group chunks by heading/section
+    const sectionGroups = new Map<string, typeof chunks>();
+
+    for (const chunk of chunks) {
+      const heading = chunk.metadata.heading || 'General';
+      const existing = sectionGroups.get(heading) || [];
+      existing.push(chunk);
+      sectionGroups.set(heading, existing);
+    }
+
+    // Build structured output
+    const sections: string[] = [];
+    let chunkIndex = 0;
+
+    for (const [heading, sectionChunks] of sectionGroups) {
+      const pageNumbers = new Set(
+        sectionChunks
+          .map(c => c.metadata.pageNumber)
+          .filter((p): p is number => p !== undefined)
+      );
+      const pageStr = pageNumbers.size > 0 ? ` (Page ${Array.from(pageNumbers).join(', ')})` : '';
+
+      const chunkTexts = sectionChunks
+        .map((c) => {
+          chunkIndex++;
+          return `[Chunk ${chunkIndex}] (score: ${c.rerankScore.toFixed(3)}, agreement: ${c.agreementCount})\n${c.text}`;
+        })
+        .join('\n\n');
+
+      sections.push(`## ${heading}${pageStr}\n\n${chunkTexts}`);
+    }
+
+    return sections.join('\n\n---\n\n');
   }
 
   /**

@@ -10,14 +10,14 @@
  *   --name <name>       Document name (default: file name)
  *   --chunk-size <n>    Chunk size in tokens (default: 512)
  *   --overlap <n>       Chunk overlap in tokens (default: 50)
- *   --provider <type>   Embedding provider: bge-m3 | local-bge-m3 | openai | mock
+ *   --provider <type>   Embedding provider: bge-m3 | local-bge-m3 | mock
  *   --data-dir <dir>    Data directory (default: ./data)
  *   --collection <name> Collection name (default: default)
  * 
  * Examples:
  *   npm run ingest -- ./documents/report.pdf
  *   npm run ingest -- ./documents/report.pdf --name "Annual Report 2024"
- *   npm run ingest -- ./documents/report.pdf --provider openai
+ *   npm run ingest -- ./documents/report.pdf --provider local-bge-m3
  */
 
 import dotenv from 'dotenv';
@@ -61,7 +61,7 @@ function parseArgs(): {
   name?: string;
   chunkSize: number;
   overlap: number;
-  provider: 'bge-m3' | 'local-bge-m3' | 'openai' | 'mock';
+  provider: 'bge-m3' | 'local-bge-m3' | 'mock';
   dataDir: string;
   collection: string;
 } {
@@ -78,14 +78,14 @@ Options:
   --name <name>        Document name (default: file name)
   --chunk-size <n>     Chunk size in tokens (default: 512)
   --overlap <n>        Chunk overlap in tokens (default: 50)
-  --provider <type>    Embedding provider: bge-m3 | local-bge-m3 | openai | mock
+  --provider <type>    Embedding provider: bge-m3 | local-bge-m3 | mock
   --data-dir <dir>     Data directory (default: ./data)
   --collection <name>  Collection name (default: default)
 
 Examples:
   npm run ingest -- ./documents/report.pdf
   npm run ingest -- ./documents/report.pdf --name "Annual Report 2024"
-  npm run ingest -- ./documents/report.pdf --provider openai
+  npm run ingest -- ./documents/report.pdf --provider local-bge-m3
   npm run ingest -- ./documents/report.pdf --collection "my-docs"
 `);
     process.exit(0);
@@ -95,8 +95,10 @@ Examples:
   let name: string | undefined;
   let chunkSize = 512;
   let overlap = 50;
-  let provider: 'bge-m3' | 'local-bge-m3' | 'openai' | 'mock' = 'bge-m3';
-  let dataDir = './data';
+  // Read provider from environment, default to bge-m3 if not set
+  let provider: 'bge-m3' | 'local-bge-m3' | 'mock' = 
+    (process.env.EMBEDDING_PROVIDER as 'bge-m3' | 'local-bge-m3' | 'mock') || 'bge-m3';
+  let dataDir = process.env.DATA_DIR || './data';
   let collection = 'default';
 
   for (let i = 0; i < args.length; i++) {
@@ -107,7 +109,7 @@ Examples:
     } else if (args[i] === '--overlap') {
       overlap = parseInt(args[++i], 10);
     } else if (args[i] === '--provider') {
-      provider = args[++i] as 'bge-m3' | 'local-bge-m3' | 'openai' | 'mock';
+      provider = args[++i] as 'bge-m3' | 'local-bge-m3' | 'mock';
     } else if (args[i] === '--data-dir') {
       dataDir = args[++i];
     } else if (args[i] === '--collection') {
@@ -245,9 +247,9 @@ async function main() {
   // Create embedding provider
   const embeddingProvider = createEmbeddingProvider({
     type: options.provider,
-    apiKey: process.env.HUGGINGFACE_API_KEY || process.env.OPENAI_API_KEY,
+    apiKey: process.env.HUGGINGFACE_API_KEY,
     baseUrl: process.env.LOCAL_BGE_M3_URL,
-    dimensions: options.provider === 'openai' ? 1536 : 1024,
+    dimensions: 1024,  // BGE-M3 uses 1024 dimensions
   });
 
   // Create persistent store

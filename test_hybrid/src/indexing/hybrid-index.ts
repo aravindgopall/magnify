@@ -247,34 +247,57 @@ export class HybridIndexer {
 
   /**
    * Execute hybrid search with multiple sub-queries (for subagent use).
+   * 
+   * Uses proper multi-list RRF: each query produces a dense and sparse ranked list,
+   * and RRF is applied across ALL lists (2 * numQueries total lists).
+   * This avoids over-weighting chunks that appear in multiple sub-query results.
    */
   async searchMultiQuery(
     queries: string[],
     topK: number = this.config.topKCandidates
   ): Promise<FusedResult[]> {
-    // Execute hybrid search for each query
-    const allResults = await Promise.all(
-      queries.map((q) => this.search(q, topK))
-    );
+    // Collect all raw ranked lists from each query's dense and sparse search
+    const allDenseLists: DenseSearchResult[][] = [];
+    const allSparseLists: SparseSearchResult[][] = [];
 
-    // Combine all results using RRF
-    const combinedResults = new Map<string, FusedResult>();
-    
-    for (const results of allResults) {
-      for (const result of results) {
-        const existing = combinedResults.get(result.chunkId);
+    for (const q of queries) {
+      const queryEmbedding = await this.embeddingProvider.embedSingle(q);
+      const denseResults = this.denseIndexer.search(queryEmbedding, topK);
+      const sparseResults = this.sparseIndexer.search(q, topK);
+      allDenseLists.push(denseResults);
+      allSparseLists.push(sparseResults);
+    }
+
+    // Apply proper multi-list RRF across ALL ranked lists (dense + sparse for each query)
+    const rrfScores = new Map<string, { rrfScore: number; text: string; metadata: any; denseRank?: number; sparseRank?: number }>();
+
+    for (const resultList of [...allDenseLists, ...allSparseLists]) {
+      for (let rank = 0; rank < resultList.length; rank++) {
+        const result = resultList[rank];
+        const existing = rrfScores.get(result.chunkId);
         if (existing) {
-          // Add RRF scores
-          existing.rrfScore += result.rrfScore;
-          existing.score = existing.rrfScore;
+          existing.rrfScore += 1 / (this.config.rrfK + rank + 1);
         } else {
-          combinedResults.set(result.chunkId, { ...result });
+          rrfScores.set(result.chunkId, {
+            rrfScore: 1 / (this.config.rrfK + rank + 1),
+            text: result.text,
+            metadata: result.metadata,
+          });
         }
       }
     }
 
-    // Sort by combined RRF score
-    return Array.from(combinedResults.values())
+    // Sort by RRF score
+    return Array.from(rrfScores.entries())
+      .map(([chunkId, data]) => ({
+        chunkId,
+        score: data.rrfScore,
+        text: data.text,
+        metadata: data.metadata,
+        denseRank: data.denseRank,
+        sparseRank: data.sparseRank,
+        rrfScore: data.rrfScore,
+      }))
       .sort((a, b) => b.rrfScore - a.rrfScore)
       .slice(0, topK);
   }
