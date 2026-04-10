@@ -1,5 +1,3 @@
-import { z } from 'zod';
-
 // ============================================================================
 // DOCUMENT & CHUNK TYPES
 // ============================================================================
@@ -241,75 +239,18 @@ export interface QueryMetadata {
   subagentCount: number;
   totalHops: number;
   processingTimeMs: number;
-  denseSearchTimeMs: number;
-  sparseSearchTimeMs: number;
   rerankTimeMs: number;
   fusionTimeMs: number;
 }
 
 // ============================================================================
-// AGENT TOOLS
-// ============================================================================
-
-export const SearchCorpusToolSchema = z.object({
-  query: z.string().describe('The search query'),
-  subQueries: z.array(z.string()).optional().describe('Optional sub-queries to search in parallel'),
-  topK: z.number().optional().default(50).describe('Number of top candidates to return'),
-});
-
-export type SearchCorpusToolParams = z.infer<typeof SearchCorpusToolSchema>;
-
-export const ReadChunksToolSchema = z.object({
-  chunkIds: z.array(z.string()).describe('Chunk IDs to read into context'),
-});
-
-export type ReadChunksToolParams = z.infer<typeof ReadChunksToolSchema>;
-
-export const GrepCorpusToolSchema = z.object({
-  pattern: z.string().describe('Regex pattern to search for'),
-  caseSensitive: z.boolean().optional().default(false).describe('Whether search is case sensitive'),
-});
-
-export type GrepCorpusToolParams = z.infer<typeof GrepCorpusToolSchema>;
-
-// ============================================================================
 // EMBEDDING & INDEX TYPES
 // ============================================================================
-
-export interface EmbeddingVector {
-  chunkId: string;
-  vector: number[];
-  model: string;
-  dimensions: number;
-}
-
-export interface BM25IndexEntry {
-  chunkId: string;
-  text: string;
-  tokens: string[];
-  termFrequencies: Map<string, number>;
-  documentLength: number;
-}
-
-export interface HybridIndex {
-  denseIndex: DenseIndex;
-  sparseIndex: BM25Index;
-  chunkStore: Map<string, Chunk>;
-}
 
 export interface DenseIndex {
   embeddings: Map<string, number[]>; // chunkId -> embedding
   model: string;
   dimensions: number;
-}
-
-export interface BM25Index {
-  documents: Map<string, BM25IndexEntry>;
-  avgDocumentLength: number;
-  totalDocuments: number;
-  documentFrequency: Map<string, number>; // term -> doc count
-  k1: number; // BM25 k1 parameter, typically 1.2-2.0
-  b: number; // BM25 b parameter, typically 0.75
 }
 
 // ============================================================================

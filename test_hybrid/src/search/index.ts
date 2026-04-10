@@ -1,7 +1,7 @@
 // Search module exports
 export {
   Reranker,
-  SimpleReranker,
+  LocalCrossEncoderReranker,
   CrossEncoderReranker,
   createReranker,
 } from './reranker.js';
