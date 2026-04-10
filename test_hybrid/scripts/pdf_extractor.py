@@ -14,6 +14,7 @@ Requirements:
     pip install fastapi uvicorn pymupdf pillow httpx python-multipart
 """
 
+import asyncio
 import base64
 import io
 import json
@@ -21,7 +22,7 @@ import logging
 import os
 import re
 from pathlib import Path
-from typing import List, Optional, Dict, Any, Literal
+from typing import List, Optional, Dict, Any, Literal, Tuple
 
 import httpx
 import pymupdf
@@ -113,6 +114,17 @@ class HealthResponse(BaseModel):
     vision_model: str
 
 
+class ImageToProcess(BaseModel):
+    """An image awaiting vision processing."""
+    base64: str
+    ext: str
+    position: Optional[List[float]]
+    context: str
+    xref: int
+    page_number: int
+    global_position: int
+
+
 def extract_text_from_block(block: dict) -> str:
     """Extract text from a PDF block."""
     if block.get("type") != 0:  # Type 0 is text
@@ -143,9 +155,11 @@ def detect_table_in_page(page: pymupdf.Page) -> List[Dict[str, Any]]:
                 # Extract table as markdown
                 table_md = table.to_markdown()
                 bbox = table.bbox  # (x0, y0, x1, y1)
+                # Convert pymupdf.Rect to list for JSON serialization
+                bbox_list = [bbox[0], bbox[1], bbox[2], bbox[3]] if bbox else None
                 tables.append({
                     "markdown": table_md,
-                    "bbox": bbox,
+                    "bbox": bbox_list,
                     "row_count": table.row_count if hasattr(table, 'row_count') else 0,
                     "col_count": table.col_count if hasattr(table, 'col_count') else 0,
                 })
@@ -190,6 +204,13 @@ def table_to_markdown(table_data: List[List[str]]) -> str:
     return "\n".join(lines)
 
 
+def _image_placeholder(image_context: str = "") -> str:
+    """Generate a placeholder description for an image when vision API is unavailable."""
+    if image_context:
+        return f"[Image content - context: {image_context[:200]}]"
+    return "[Image content - description unavailable]"
+
+
 async def describe_image_with_vision(image_base64: str, image_context: str = "") -> str:
     """
     Generate a text description of an image using the vision model.
@@ -201,9 +222,9 @@ async def describe_image_with_vision(image_base64: str, image_context: str = "")
     Returns:
         Text description of the image
     """
-    if not VISION_API_KEY:
-        logger.warning("No vision API key configured, returning placeholder description")
-        return "[Image content - vision API not configured]"
+    if not VISION_API_KEY or not VISION_API_URL:
+        logger.warning("No vision API configured, returning placeholder description")
+        return _image_placeholder(image_context)
     
     try:
         async with httpx.AsyncClient(timeout=60.0) as client:
@@ -249,20 +270,32 @@ Provide a concise but comprehensive description that would help someone understa
             )
             
             if response.status_code != 200:
-                logger.error(f"Vision API error: {response.status_code} - {response.text}")
-                return f"[Image - vision API error: {response.status_code}]"
+                logger.error(f"Vision API error: {response.status_code} - {response.text[:200]}")
+                return _image_placeholder(image_context)
             
             data = response.json()
-            description = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+            message = data.get("choices", [{}])[0].get("message", {})
             
-            return description or "[Image - no description generated]"
+            # Handle different response formats:
+            # - Standard: content is a string
+            # - Thinking models: content may be null, use reasoning_content instead
+            description = message.get("content") or message.get("reasoning_content") or ""
             
+            if not description or not description.strip():
+                logger.warning("Vision API returned empty description")
+                return _image_placeholder(image_context)
+            
+            return description.strip()
+            
+    except httpx.TimeoutException:
+        logger.error("Vision API timeout (60s)")
+        return _image_placeholder(image_context)
     except Exception as e:
         logger.error(f"Error calling vision API: {e}")
-        return f"[Image - description error: {str(e)}]"
+        return _image_placeholder(image_context)
 
 
-def extract_images_from_page(page: pymupdf.Page) -> List[Dict[str, Any]]:
+def extract_images_from_page(page: pymupdf.Page, page_number: int) -> List[Dict[str, Any]]:
     """
     Extract images from a PDF page.
     Returns list of image information including base64 data.
@@ -285,7 +318,9 @@ def extract_images_from_page(page: pymupdf.Page) -> List[Dict[str, Any]]:
                 img_rects = page.get_image_rects(xref)
                 position = None
                 if img_rects:
-                    position = img_rects[0]  # (x0, y0, x1, y1)
+                    # Convert pymupdf.Rect to list for JSON serialization
+                    rect = img_rects[0]
+                    position = [rect.x0, rect.y0, rect.x1, rect.y1]
                 
                 # Convert to base64
                 image_base64 = base64.b64encode(image_bytes).decode("utf-8")
@@ -305,6 +340,7 @@ def extract_images_from_page(page: pymupdf.Page) -> List[Dict[str, Any]]:
                     "position": position,
                     "context": surrounding_text.strip(),
                     "xref": xref,
+                    "page_number": page_number,
                 })
                 
             except Exception as e:
@@ -315,6 +351,57 @@ def extract_images_from_page(page: pymupdf.Page) -> List[Dict[str, Any]]:
         logger.debug(f"Image extraction failed: {e}")
     
     return images
+
+
+async def process_all_images_parallel(
+    all_images: List[Dict[str, Any]],
+    extracted_xrefs: set
+) -> List[Tuple[int, int, str, Optional[List[float]], str]]:  # (page_num, position, description, bbox, ext)
+    """
+    Process all images across all pages in parallel.
+    
+    Args:
+        all_images: List of image dicts with page_number, base64, context, etc.
+        extracted_xrefs: Set of already-processed xrefs
+    
+    Returns:
+        List of tuples: (page_number, position, description, bbox, ext)
+    """
+    # Filter unique images and prepare for batch processing
+    unique_images = []
+    for img in all_images:
+        xref = img.get("xref")
+        if xref in extracted_xrefs:
+            continue
+        extracted_xrefs.add(xref)
+        unique_images.append(img)
+    
+    if not unique_images:
+        return []
+    
+    logger.info(f"Processing {len(unique_images)} unique image(s) in parallel...")
+    
+    # Process all images in parallel with limited concurrency
+    semaphore = asyncio.Semaphore(5)  # Max 5 concurrent vision API calls
+    
+    async def process_one(img: Dict[str, Any]) -> Tuple[int, int, str, Optional[List[float]], str]:
+        async with semaphore:
+            description = await describe_image_with_vision(
+                img["base64"],
+                img.get("context", "")
+            )
+            return (
+                img["page_number"],
+                img.get("position"),
+                description,
+                img.get("position"),
+                img.get("ext", "png")
+            )
+    
+    results = await asyncio.gather(*[process_one(img) for img in unique_images])
+    logger.info(f"Completed processing {len(results)} image(s)")
+    
+    return results
 
 
 async def extract_from_pdf(
@@ -345,11 +432,16 @@ async def extract_from_pdf(
         # Track position across all pages
         global_position = 0
         
+        # Collect all images across all pages for batch processing
+        all_images: List[Dict[str, Any]] = []
+        
         # Track extracted image xrefs to avoid duplicates
         extracted_xrefs = set()
         
+        # First pass: extract text, tables, and collect images
         for page_num in range(total_pages):
             page = doc[page_num]
+            logger.info(f"Processing page {page_num + 1}/{total_pages}...")
             
             # Get page text with structure
             blocks = page.get_text("dict", flags=pymupdf.TEXT_PRESERVE_WHITESPACE).get("blocks", [])
@@ -359,23 +451,16 @@ async def extract_from_pdf(
             if extract_tables:
                 page_tables = detect_table_in_page(page)
             
-            # Extract images from this page
-            page_images = []
+            # Extract images from this page (collect for later processing)
             if extract_images:
-                page_images = extract_images_from_page(page)
+                page_images = extract_images_from_page(page, page_num + 1)
+                all_images.extend(page_images)
             
             # Track which y-positions are covered by tables
             table_positions = []
             for table in page_tables:
                 bbox = table.get("bbox", (0, 0, 0, 0))
                 table_positions.append((bbox[1], bbox[3], table))  # y0, y1, table
-            
-            # Track which y-positions are covered by images
-            image_positions = []
-            for img in page_images:
-                pos = img.get("position")
-                if pos:
-                    image_positions.append((pos[1], pos[3], img))  # y0, y1, img
             
             # Process blocks in order
             for block in blocks:
@@ -428,36 +513,29 @@ async def extract_from_pdf(
                         }
                     ))
                     global_position += 1
+        
+        # Second pass: process all images in parallel across all pages
+        if extract_images and all_images:
+            image_results = await process_all_images_parallel(all_images, extracted_xrefs)
             
-            # Add images with descriptions
-            for img in page_images:
-                xref = img.get("xref")
-                if xref in extracted_xrefs:
-                    continue
-                extracted_xrefs.add(xref)
-                
-                # Generate description using vision model
-                description = await describe_image_with_vision(
-                    img["base64"],
-                    img.get("context", "")
-                )
-                
+            # Add image results to contents
+            for page_num, _, description, position, ext in image_results:
                 if description.strip():
-                    # Prepend with marker for image
                     img_text = f"[IMAGE DESCRIPTION]\n{description}\n[/IMAGE DESCRIPTION]"
                     contents.append(ExtractedContent(
                         type="image",
                         text=img_text,
-                        page_number=page_num + 1,
+                        page_number=page_num,
                         position=global_position,
                         metadata={
-                            "image_ext": img.get("ext"),
-                            "bbox": img.get("position"),
+                            "image_ext": ext,
+                            "bbox": position,
                         }
                     ))
                     global_position += 1
         
         doc.close()
+        logger.info(f"Extraction complete: {len(contents)} items from {total_pages} pages")
         
         # Sort by page number and position
         contents.sort(key=lambda x: (x.page_number, x.position))
