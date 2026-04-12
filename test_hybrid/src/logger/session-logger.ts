@@ -262,14 +262,6 @@ export class SessionLogger {
   }
 
   /**
-   * Log a search operation
-   */
-  logSearch(entry: SearchLogEntry): void {
-    // Searches are logged within hops, so we don't need to store separately
-    // This method can be used for standalone searches
-  }
-
-  /**
    * Log master RRF fusion
    */
   logMasterFusion(entry: MasterFusionLogEntry): void {

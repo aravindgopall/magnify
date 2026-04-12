@@ -211,13 +211,14 @@ def _image_placeholder(image_context: str = "") -> str:
     return "[Image content - description unavailable]"
 
 
-async def describe_image_with_vision(image_base64: str, image_context: str = "") -> str:
+async def describe_image_with_vision(image_base64: str, image_context: str = "", max_retries: int = 5) -> str:
     """
     Generate a text description of an image using the vision model.
     
     Args:
         image_base64: Base64 encoded image data
         image_context: Optional context (e.g., surrounding text)
+        max_retries: Maximum number of retries for rate limiting (429 errors)
     
     Returns:
         Text description of the image
@@ -226,22 +227,25 @@ async def describe_image_with_vision(image_base64: str, image_context: str = "")
         logger.warning("No vision API configured, returning placeholder description")
         return _image_placeholder(image_context)
     
-    try:
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            # Prepare the message with image
-            messages = [
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": f"data:image/png;base64,{image_base64}"
-                            }
-                        },
-                        {
-                            "type": "text",
-                            "text": f"""Analyze this image from a document and provide a detailed description.
+    retry_delay = 5  # seconds - increased initial delay
+    
+    for attempt in range(max_retries):
+        try:
+            async with httpx.AsyncClient(timeout=120.0) as client:
+                # Prepare the message with image
+                messages = [
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": f"data:image/png;base64,{image_base64}"
+                                }
+                            },
+                            {
+                                "type": "text",
+                                "text": f"""Analyze this image from a document and provide a detailed description.
 {'Context from surrounding text: ' + image_context if image_context else ''}
 
 Please describe:
@@ -251,48 +255,68 @@ Please describe:
 4. The purpose or meaning of this image in a document context
 
 Provide a concise but comprehensive description that would help someone understand the image content."""
-                        }
-                    ]
-                }
-            ]
-            
-            response = await client.post(
-                VISION_API_URL,
-                headers={
-                    "Authorization": f"Bearer {VISION_API_KEY}",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": VISION_MODEL,
-                    "messages": messages,
-                    "max_tokens": 1000,
-                }
-            )
-            
-            if response.status_code != 200:
-                logger.error(f"Vision API error: {response.status_code} - {response.text[:200]}")
-                return _image_placeholder(image_context)
-            
-            data = response.json()
-            message = data.get("choices", [{}])[0].get("message", {})
-            
-            # Handle different response formats:
-            # - Standard: content is a string
-            # - Thinking models: content may be null, use reasoning_content instead
-            description = message.get("content") or message.get("reasoning_content") or ""
-            
-            if not description or not description.strip():
-                logger.warning("Vision API returned empty description")
-                return _image_placeholder(image_context)
-            
-            return description.strip()
-            
-    except httpx.TimeoutException:
-        logger.error("Vision API timeout (60s)")
-        return _image_placeholder(image_context)
-    except Exception as e:
-        logger.error(f"Error calling vision API: {e}")
-        return _image_placeholder(image_context)
+                            }
+                        ]
+                    }
+                ]
+                
+                response = await client.post(
+                    VISION_API_URL,
+                    headers={
+                        "Authorization": f"Bearer {VISION_API_KEY}",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "model": VISION_MODEL,
+                        "messages": messages,
+                        "max_tokens": 1000,
+                    }
+                )
+                
+                if response.status_code == 429:
+                    # Rate limit hit
+                    error_text = response.text[:100]
+                    if attempt < max_retries - 1:
+                        logger.warning(f"Vision API rate limit (429), retrying in {retry_delay}s (attempt {attempt + 1}/{max_retries})")
+                        await asyncio.sleep(retry_delay)
+                        retry_delay *= 2  # Exponential backoff
+                        continue
+                    else:
+                        logger.error(f"Vision API rate limit exceeded after {max_retries} attempts")
+                        return _image_placeholder(image_context)
+                
+                if response.status_code != 200:
+                    logger.error(f"Vision API error: {response.status_code} - {response.text[:200]}")
+                    return _image_placeholder(image_context)
+                
+                data = response.json()
+                message = data.get("choices", [{}])[0].get("message", {})
+                
+                # Handle different response formats:
+                # - Standard: content is a string
+                # - Thinking models: content may be null, use reasoning_content instead
+                description = message.get("content") or message.get("reasoning_content") or ""
+                
+                if not description or not description.strip():
+                    logger.warning("Vision API returned empty description")
+                    return _image_placeholder(image_context)
+                
+                return description.strip()
+                
+        except httpx.TimeoutException:
+            if attempt < max_retries - 1:
+                logger.warning(f"Vision API timeout, retrying in {retry_delay}s (attempt {attempt + 1}/{max_retries})")
+                await asyncio.sleep(retry_delay)
+                retry_delay *= 2
+                continue
+            logger.error("Vision API timeout (60s) - all retries exhausted")
+            return _image_placeholder(image_context)
+        except Exception as e:
+            logger.error(f"Error calling vision API: {e}")
+            return _image_placeholder(image_context)
+    
+    # Should not reach here, but fallback just in case
+    return _image_placeholder(image_context)
 
 
 def extract_images_from_page(page: pymupdf.Page, page_number: int) -> List[Dict[str, Any]]:
@@ -382,21 +406,35 @@ async def process_all_images_parallel(
     logger.info(f"Processing {len(unique_images)} unique image(s) in parallel...")
     
     # Process all images in parallel with limited concurrency
-    semaphore = asyncio.Semaphore(5)  # Max 5 concurrent vision API calls
+    # Reduced to 1 to avoid rate limiting issues with vision API
+    semaphore = asyncio.Semaphore(1)
     
     async def process_one(img: Dict[str, Any]) -> Tuple[int, int, str, Optional[List[float]], str]:
         async with semaphore:
-            description = await describe_image_with_vision(
-                img["base64"],
-                img.get("context", "")
-            )
-            return (
-                img["page_number"],
-                img.get("position"),
-                description,
-                img.get("position"),
-                img.get("ext", "png")
-            )
+            # Retry logic for rate limiting
+            max_retries = 3
+            retry_delay = 2  # seconds
+            
+            for attempt in range(max_retries):
+                try:
+                    description = await describe_image_with_vision(
+                        img["base64"],
+                        img.get("context", "")
+                    )
+                    return (
+                        img["page_number"],
+                        img.get("position"),
+                        description,
+                        img.get("position"),
+                        img.get("ext", "png")
+                    )
+                except Exception as e:
+                    if "429" in str(e) and attempt < max_retries - 1:
+                        logger.warning(f"Rate limit hit, retrying in {retry_delay}s (attempt {attempt + 1}/{max_retries})")
+                        await asyncio.sleep(retry_delay)
+                        retry_delay *= 2  # Exponential backoff
+                    else:
+                        raise
     
     results = await asyncio.gather(*[process_one(img) for img in unique_images])
     logger.info(f"Completed processing {len(results)} image(s)")

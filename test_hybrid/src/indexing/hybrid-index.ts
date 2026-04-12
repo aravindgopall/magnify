@@ -4,7 +4,6 @@ import type {
   SparseSearchResult,
   FusedResult,
   RerankedResult,
-  HybridIndex,
   RRFConfig,
   HybridSearchConfig,
 } from '../types/index.js';
@@ -349,33 +348,6 @@ export class HybridIndexer {
     this.chunkStore.clear();
   }
 
-  /**
-   * Grep the corpus for exact text matches.
-   */
-  grep(pattern: string, caseSensitive: boolean = false): Array<{ chunkId: string; matches: string[] }> {
-    const regex = new RegExp(pattern, caseSensitive ? 'g' : 'gi');
-    const results: Array<{ chunkId: string; matches: string[] }> = [];
-
-    for (const [chunkId, chunk] of this.chunkStore) {
-      const matches = chunk.text.match(regex);
-      if (matches && matches.length > 0) {
-        results.push({ chunkId, matches });
-      }
-    }
-
-    return results;
-  }
-
-  /**
-   * Get the underlying indexers for advanced operations.
-   */
-  getDenseIndexer(): DenseIndexer {
-    return this.denseIndexer;
-  }
-
-  getSparseIndexer(): BM25Indexer {
-    return this.sparseIndexer;
-  }
 }
 
 /**

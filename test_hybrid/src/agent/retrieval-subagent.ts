@@ -14,7 +14,8 @@ import type {
 import { DEFAULT_HYBRID_SEARCH_CONFIG } from '../types/index.js';
 import type { HybridIndexer } from '../indexing/hybrid-index.js';
 import type { Reranker } from '../search/reranker.js';
-import type { SessionLogger, SearchLogEntry } from '../logger/index.js';
+import type { SessionLogger } from '../logger/index.js';
+import { extractTextFromMessage } from '../utils/index.js';
 
 // Initialize model registry
 const authStorage = AuthStorage.create();
@@ -199,13 +200,59 @@ Response format:
   }
 
   /**
-   * Decompose a complex query into simpler sub-queries.
+   * Decompose a complex query into simpler sub-queries using LLM.
+   * Falls back to rule-based decomposition if LLM is unavailable.
+   * 
+   * Note: The main query decomposition happens in HybridSearchAgent.decomposeQuery()
+   * which creates diverse subqueries for each subagent. This method provides
+   * additional per-subagent decomposition for complex queries.
    */
   private async decomposeQuery(query: string): Promise<string[]> {
-    // Simple decomposition: split by question words and conjunctions
+    // Try LLM-based decomposition first
+    try {
+      this.agent.reset();
+      const prompt = `Break down this search query into 2-3 simpler sub-queries for document retrieval.
+Each sub-query should focus on a different aspect of the original query.
+If the query is simple, just return the original query.
+
+Query: "${query}"
+
+Respond with ONLY a JSON array of strings, no other text.
+Example: ["aspect one", "aspect two", "aspect three"]`;
+
+      await this.agent.prompt(prompt);
+      await this.agent.waitForIdle();
+
+      const messages = this.agent.state.messages;
+      const lastMessage = messages[messages.length - 1];
+      const response = extractTextFromMessage(lastMessage);
+
+      const jsonMatch = response.match(/\[[\s\S]*\]/);
+      if (jsonMatch) {
+        const subqueries = JSON.parse(jsonMatch[0]);
+        if (Array.isArray(subqueries) && subqueries.length > 0) {
+          // Always include original query as the primary
+          const result = [query, ...subqueries.filter((sq: string) => sq !== query)];
+          console.log(`[Subagent ${this.id}] LLM decomposed: ${result.join(', ')}`);
+          return [...new Set(result)];
+        }
+      }
+    } catch (error) {
+      console.warn(`[Subagent ${this.id}] LLM decomposition failed, using rule-based fallback:`, error);
+    }
+
+    // Fallback: rule-based decomposition
+    return this.decomposeQueryRuleBased(query);
+  }
+
+  /**
+   * Rule-based query decomposition (fallback when LLM is unavailable).
+   * Splits by conjunctions and detects compound questions.
+   */
+  private decomposeQueryRuleBased(query: string): string[] {
     const subQueries: string[] = [query];
 
-    // Check for compound questions
+    // Split by conjunctions
     const conjunctions = [' and ', ' or ', ' also ', ' as well as '];
     for (const conj of conjunctions) {
       if (query.toLowerCase().includes(conj)) {
@@ -216,18 +263,6 @@ Response format:
       }
     }
 
-    // Check for question words that might indicate multiple questions
-    const questionWords = ['what', 'how', 'why', 'when', 'where', 'who', 'which'];
-    for (const word of questionWords) {
-      const regex = new RegExp(`\\b${word}\\b`, 'gi');
-      const matches = query.match(regex);
-      if (matches && matches.length > 1) {
-        // Multiple question words - decomposition is valid
-        break;
-      }
-    }
-
-    // Deduplicate
     return [...new Set(subQueries)];
   }
 
@@ -271,6 +306,9 @@ Response format:
 
   /**
    * Observe the current state and gather information.
+   * Prepares context for LLM reasoning - does NOT make decisions.
+   * Decision-making is handled by reason() via LLM.
+   * Threshold-based heuristics are only used as fallback if LLM fails.
    */
   private async observe(): Promise<AgentObservation> {
     const observation: AgentObservation = {
@@ -286,8 +324,20 @@ Response format:
 
     // Assess what we know and what's missing
     observation.currentKnowledge = this.assessCurrentKnowledge();
-    
-    // Evaluate chunk quality (for information only, no pruning)
+
+    // Note: Chunk quality classification and hop/terminate decisions
+    // are made by the LLM in reason(). Threshold-based heuristics
+    // below are ONLY used as fallback when LLM is unavailable.
+    this.computeHeuristicFallback(observation);
+
+    return observation;
+  }
+
+  /**
+   * Compute threshold-based heuristic decisions.
+   * Used ONLY as fallback when LLM reasoning is unavailable.
+   */
+  private computeHeuristicFallback(observation: AgentObservation): void {
     const isBM25Only = this.state.retrievedChunks.some(c => c.rerankScore < 0.1);
     const relevantThreshold = isBM25Only ? 0.3 : 0.7;
     const partialThreshold = isBM25Only ? 0.1 : 0.4;
@@ -302,14 +352,11 @@ Response format:
       }
     }
 
-    // Determine if we need to hop
     const relevantCount = Array.from(observation.chunkQuality.values())
       .filter((q) => isBM25Only ? (q === 'relevant' || q === 'partial') : q === 'relevant').length;
     
     observation.shouldHop = relevantCount < 3 && this.state.hopCount < this.state.maxHops;
     observation.shouldTerminate = relevantCount >= 3 || this.state.hopCount >= this.state.maxHops;
-
-    return observation;
   }
 
   /**
@@ -380,7 +427,7 @@ Examples:
 
       const messages = this.agent.state.messages;
       const lastMessage = messages[messages.length - 1];
-      const response = this.extractTextFromMessage(lastMessage);
+      const response = extractTextFromMessage(lastMessage);
 
       console.log(`[Subagent ${this.id}] LLM decision: ${response.slice(0, 200)}...`);
 
@@ -432,25 +479,6 @@ Examples:
         reason: 'Completed evaluation',
       };
     }
-  }
-
-  /**
-   * Extract text from a message (handles both string and array content).
-   */
-  private extractTextFromMessage(message: any): string {
-    if (typeof message.content === 'string') {
-      return message.content;
-    }
-
-    if (Array.isArray(message.content)) {
-      return message.content
-        .filter((c: any) => c.type === 'text')
-        .map((c: any) => c.text || '')
-        .filter(Boolean)
-        .join('\n');
-    }
-
-    return '';
   }
 
   /**

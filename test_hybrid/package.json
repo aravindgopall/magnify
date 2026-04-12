@@ -29,16 +29,15 @@
     "@mariozechner/pi-agent-core": "^0.62.0",
     "@mariozechner/pi-ai": "^0.62.0",
     "@mariozechner/pi-coding-agent": "^0.62.0",
-    "chromadb": "^1.8.1",
     "cors": "^2.8.5",
     "dotenv": "^17.3.1",
     "express": "^4.18.2",
     "flexsearch": "^0.8.212",
+    "form-data": "^4.0.5",
     "fuse.js": "^7.0.0",
-    "natural": "^6.10.4",
-    "pdf-parse": "^1.1.1",
-    "uuid": "^9.0.0",
-    "zod": "^3.22.4"
+    "node-fetch": "^3.3.2",
+    "stopword": "^3.1.5",
+    "uuid": "^9.0.0"
   },
   "devDependencies": {
     "@types/cors": "^2.8.17",

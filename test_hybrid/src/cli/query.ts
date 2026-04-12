@@ -26,7 +26,6 @@ import path from 'path';
 import { createHybridSearchAgent } from '../agent/hybrid-search-agent.js';
 import { createHybridIndexer } from '../indexing/hybrid-index.js';
 import { createEmbeddingProvider } from '../indexing/dense-index.js';
-import { createDocument } from '../indexing/chunker.js';
 import type { HybridSearchConfig, Chunk, QueryResponse } from '../types/index.js';
 import { DEFAULT_HYBRID_SEARCH_CONFIG } from '../types/index.js';
 

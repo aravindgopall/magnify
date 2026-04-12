@@ -10,25 +10,96 @@
  * 
  * Technical Stack:
  * - Dense Vector Search: Semantic similarity using embeddings
- * - Sparse BM25 Index: Keyword/exact matching
+ * - Sparse BM25 Index: Keyword/exact matching (FlexSearch)
  * - RRF Fusion: Reciprocal Rank Fusion for combining search results
  * - Cross-Encoder Reranking: Precise relevance scoring
  * - Multi-hop Retrieval: Iterative query refinement
  */
 
-// Types
-export * from './types/index.js';
+// ============================================================================
+// Types - explicit exports only (no unused Zod schemas)
+// ============================================================================
+export type {
+  ChunkType,
+  Chunk,
+  ChunkMetadata,
+  Document,
+  DocumentMetadata,
+  SearchResult,
+  DenseSearchResult,
+  SparseSearchResult,
+  FusedResult,
+  RerankedResult,
+  RRFConfig,
+  SubagentState,
+  SubagentMemory,
+  SubagentResult,
+  AgentAction,
+  AgentObservation,
+  MasterRankedList,
+  MasterRankedChunk,
+  QueryRequest,
+  QueryOptions,
+  QueryResponse,
+  SourceReference,
+  QueryMetadata,
+  DenseIndex,
+  HybridSearchConfig,
+} from './types/index.js';
 
+export {
+  DEFAULT_RRF_CONFIG,
+  DEFAULT_HYBRID_SEARCH_CONFIG,
+} from './types/index.js';
+
+// ============================================================================
 // Indexing
-export * from './indexing/index.js';
+// ============================================================================
+export {
+  estimateTokenCount,
+  chunkText,
+  chunkDocument,
+  createDocument,
+  createChunksFromExtractedContent,
+  BM25Indexer as FlexSearchBM25Indexer,
+  createBM25Indexer,
+  cosineSimilarity,
+  DenseIndexer,
+  createDenseIndexer,
+  EmbeddingProvider,
+  MockEmbeddingProvider,
+  BGEM3EmbeddingProvider,
+  LocalBGEM3Provider,
+  createEmbeddingProvider,
+  reciprocalRankFusion,
+  masterRRFFusion,
+  HybridIndexer,
+  createHybridIndexer,
+} from './indexing/index.js';
 
+// ============================================================================
 // Search
-export * from './search/index.js';
+// ============================================================================
+export {
+  Reranker,
+  LocalCrossEncoderReranker,
+  CrossEncoderReranker,
+  createReranker,
+} from './search/index.js';
 
+// ============================================================================
 // Agents
-export * from './agent/index.js';
+// ============================================================================
+export {
+  RetrievalSubagent,
+  createRetrievalSubagent,
+  HybridSearchAgent,
+  createHybridSearchAgent,
+} from './agent/index.js';
 
-// Convenience imports
+// ============================================================================
+// Convenience
+// ============================================================================
 import { HybridSearchAgent, createHybridSearchAgent } from './agent/hybrid-search-agent.js';
 import { HybridIndexer, createHybridIndexer } from './indexing/hybrid-index.js';
 import { createReranker } from './search/reranker.js';

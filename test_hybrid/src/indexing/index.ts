@@ -4,7 +4,7 @@ export {
   chunkText,
   chunkDocument,
   createDocument,
-  mergeSmallChunks,
+  createChunksFromExtractedContent,
 } from './chunker.js';
 
 export {

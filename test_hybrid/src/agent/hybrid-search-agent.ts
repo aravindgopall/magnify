@@ -16,6 +16,7 @@ import { HybridIndexer, createHybridIndexer, masterRRFFusion } from '../indexing
 import { createReranker, Reranker } from '../search/reranker.js';
 import { RetrievalSubagent, createRetrievalSubagent } from './retrieval-subagent.js';
 import { SessionLogger, createSessionLogger, type SessionLog } from '../logger/index.js';
+import { extractTextFromMessage } from '../utils/index.js';
 
 // Initialize model registry
 const authStorage = AuthStorage.create();
@@ -159,7 +160,7 @@ Provide ${subagentCount} different subqueries that will help find comprehensive 
       
       const messages = this.queryDecompositionAgent.state.messages;
       const lastMessage = messages[messages.length - 1];
-      const response = this.extractTextFromMessage(lastMessage);
+      const response = extractTextFromMessage(lastMessage);
       
       // Parse JSON array from response
       const jsonMatch = response.match(/\[[\s\S]*\]/);
@@ -289,8 +290,6 @@ Guidelines:
           subagentCount,
           totalHops: 0,
           processingTimeMs: Date.now() - startTime,
-          denseSearchTimeMs: 0,
-          sparseSearchTimeMs: 0,
           rerankTimeMs: 0,
           fusionTimeMs: Date.now() - fusionStartTime,
         },
@@ -338,6 +337,7 @@ Guidelines:
 
     // Step 3: Main Agent Synthesis
     const synthesisResult = await this.synthesizeAnswer(query, masterRankedChunks, options);
+    const rerankTimeMs = synthesisResult.rerankTimeMs;
     
     // Build response
     const sources: SourceReference[] = masterRankedChunks
@@ -375,9 +375,7 @@ Guidelines:
         subagentCount,
         totalHops,
         processingTimeMs,
-        denseSearchTimeMs: 0, // Tracked internally
-        sparseSearchTimeMs: 0, // Tracked internally
-        rerankTimeMs: 0, // Tracked internally
+        rerankTimeMs,
         fusionTimeMs,
       },
     };
@@ -425,9 +423,9 @@ Guidelines:
     query: string,
     masterRankedChunks: Array<RerankedResult & { agreementCount: number; sourceAgents: string[] }>,
     options?: { extractionType?: 'summary' | 'entities' | 'full' | 'custom'; customPrompt?: string }
-  ): Promise<{ answer: string }> {
+  ): Promise<{ answer: string; rerankTimeMs: number }> {
     if (masterRankedChunks.length === 0) {
-      return { answer: 'No relevant information found.' };
+      return { answer: 'No relevant information found.', rerankTimeMs: 0 };
     }
 
     // Step 1: Take top 50 from master RRF
@@ -476,7 +474,7 @@ Synthesize your answer based on the evidence above. Cite sources using the secti
       await this.synthesisAgent.waitForIdle();
     } catch (error) {
       console.error('[HybridSearchAgent] Synthesis error:', error);
-      return { answer: `Error generating answer: ${error instanceof Error ? error.message : String(error)}` };
+      return { answer: `Error generating answer: ${error instanceof Error ? error.message : String(error)}`, rerankTimeMs };
     }
 
     // Extract the answer
@@ -487,15 +485,15 @@ Synthesize your answer based on the evidence above. Cite sources using the secti
 
     if (!lastMessage) {
       console.error('[HybridSearchAgent] No messages in response');
-      return { answer: 'Failed to generate an answer - no response from model.' };
+      return { answer: 'Failed to generate an answer - no response from model.', rerankTimeMs };
     }
 
-    const answer = this.extractTextFromMessage(lastMessage);
+    const answer = extractTextFromMessage(lastMessage);
     
     if (!answer || answer.trim().length === 0) {
       console.error('[HybridSearchAgent] Empty answer extracted');
       console.log('[HybridSearchAgent] Last message:', JSON.stringify(lastMessage, null, 2));
-      return { answer: 'The model returned an empty response. The relevant chunks were found but no answer was generated.' };
+      return { answer: 'The model returned an empty response. The relevant chunks were found but no answer was generated.', rerankTimeMs };
     }
     
     // Log LLM interaction
@@ -517,7 +515,7 @@ Synthesize your answer based on the evidence above. Cite sources using the secti
       });
     }
     
-    return { answer };
+    return { answer, rerankTimeMs };
   }
 
   private getFormatInstructions(extractionType: string): string {
@@ -531,22 +529,6 @@ Synthesize your answer based on the evidence above. Cite sources using the secti
       default:
         return `FORMAT: Provide a clear, well-organized answer with appropriate detail. Cite chunks.`;
     }
-  }
-
-  private extractTextFromMessage(message: any): string {
-    if (typeof message.content === 'string') {
-      return message.content;
-    }
-
-    if (Array.isArray(message.content)) {
-      return message.content
-        .filter((c: any) => c.type === 'text')
-        .map((c: any) => c.text || '')
-        .filter(Boolean)
-        .join('\n');
-    }
-
-    return '';
   }
 
   /**

@@ -295,8 +295,9 @@ export function createDocument(
 /**
  * Create a single chunk from extracted content (table, image, or text).
  * Tables and images are kept as single chunks to preserve their structure.
+ * Internal helper used by createChunksFromExtractedContent.
  */
-export function createChunkFromContent(
+function createChunkFromContent(
   documentId: string,
   content: {
     type: ChunkType;
@@ -397,56 +398,3 @@ export function createChunksFromExtractedContent(
   return chunks;
 }
 
-/**
- * Merge small consecutive chunks that are below minimum size.
- * This helps prevent too many tiny chunks.
- */
-export function mergeSmallChunks(
-  chunks: Chunk[],
-  minTokenCount: number = 100
-): Chunk[] {
-  if (chunks.length === 0) return chunks;
-
-  const merged: Chunk[] = [];
-  let current: Chunk | null = null;
-
-  for (const chunk of chunks) {
-    if (!current) {
-      current = { ...chunk };
-      continue;
-    }
-
-    if (current.tokenCount < minTokenCount) {
-      // Merge with next chunk
-      current = {
-        ...current,
-        text: current.text + ' ' + chunk.text,
-        tokenCount: estimateTokenCount(current.text + ' ' + chunk.text),
-        metadata: {
-          ...current.metadata,
-          nextChunkId: chunk.metadata.nextChunkId,
-        },
-      };
-    } else {
-      merged.push(current);
-      current = { ...chunk };
-    }
-  }
-
-  if (current) {
-    merged.push(current);
-  }
-
-  // Re-link chunks
-  for (let i = 0; i < merged.length; i++) {
-    merged[i].position = i;
-    if (i > 0) {
-      merged[i].metadata.previousChunkId = merged[i - 1].id;
-    }
-    if (i < merged.length - 1) {
-      merged[i].metadata.nextChunkId = merged[i + 1].id;
-    }
-  }
-
-  return merged;
-}

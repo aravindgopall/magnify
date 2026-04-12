@@ -6,6 +6,8 @@
  */
 
 import type { ChunkType } from '../types/index.js';
+import FormData from 'form-data';
+import fetch from 'node-fetch';
 
 /**
  * Extracted content from a PDF.
@@ -54,7 +56,7 @@ export class PDFExtractorClient {
 
   constructor(config: PDFExtractorConfig) {
     this.baseUrl = config.baseUrl.replace(/\/$/, '');
-    this.timeout = config.timeout || 120000; // 2 minutes default
+    this.timeout = config.timeout || 300000; // 5 minutes default (large PDFs with images can be slow)
     this.extractImages = config.extractImages ?? true;
     this.extractTables = config.extractTables ?? true;
   }
@@ -82,16 +84,21 @@ export class PDFExtractorClient {
    */
   async extractPdf(pdfBytes: Buffer, fileName: string): Promise<ExtractionResult> {
     const formData = new FormData();
-    formData.append('file', new Blob([new Uint8Array(pdfBytes)], { type: 'application/pdf' }), fileName);
+    formData.append('file', pdfBytes, {
+      filename: fileName,
+      contentType: 'application/pdf',
+    });
     
     const params = new URLSearchParams({
       extract_images: String(this.extractImages),
       extract_tables: String(this.extractTables),
     });
 
+    const headers = formData.getHeaders();
     const response = await fetch(`${this.baseUrl}/extract?${params}`, {
       method: 'POST',
       body: formData,
+      headers: headers as Record<string, string>,
       signal: AbortSignal.timeout(this.timeout),
     });
 
@@ -100,7 +107,7 @@ export class PDFExtractorClient {
       throw new Error(`PDF extraction failed: ${response.status} - ${errorText}`);
     }
 
-    return response.json();
+    return response.json() as Promise<ExtractionResult>;
   }
 
   /**
@@ -136,11 +143,14 @@ export function createPDFExtractor(config: PDFExtractorConfig): PDFExtractorClie
 /**
  * Default PDF extractor using local extraction server.
  */
-export function createDefaultPDFExtractor(): PDFExtractorClient {
+export function createDefaultPDFExtractor(options?: { 
+  extractImages?: boolean; 
+  extractTables?: boolean;
+}): PDFExtractorClient {
   return createPDFExtractor({
     baseUrl: process.env.PDF_EXTRACTOR_URL || 'http://localhost:8001',
-    timeout: 120000,
-    extractImages: true,
-    extractTables: true,
+    timeout: parseInt(process.env.PDF_EXTRACT_TIMEOUT || '300000', 10),
+    extractImages: options?.extractImages ?? process.env.PDF_EXTRACT_IMAGES !== 'false',
+    extractTables: options?.extractTables ?? process.env.PDF_EXTRACT_TABLES !== 'false',
   });
 }

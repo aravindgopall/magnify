@@ -1,4 +1,4 @@
-import type { Chunk, DenseSearchResult, DenseIndex, EmbeddingVector } from '../types/index.js';
+import type { Chunk, DenseSearchResult, DenseIndex } from '../types/index.js';
 
 /**
  * Simple cosine similarity calculation.
@@ -149,13 +149,6 @@ export class DenseIndexer {
   clear(): void {
     this.index.embeddings.clear();
     this.chunkStore.clear();
-  }
-
-  /**
-   * Get the underlying index.
-   */
-  getIndex(): DenseIndex {
-    return this.index;
   }
 
   /**
