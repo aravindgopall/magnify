@@ -1,5 +1,6 @@
 import { Index } from 'flexsearch';
 import type { Chunk, SparseSearchResult } from '../types/index.js';
+import { tokenize } from '../utils/index.js';
 
 /**
  * BM25-compatible sparse index using FlexSearch.
@@ -39,21 +40,10 @@ export class BM25Indexer {
   }
 
   /**
-   * Tokenize text into lowercase terms (kept for compatibility and length calculation).
-   */
-  static tokenize(text: string): string[] {
-    return text
-      .toLowerCase()
-      .replace(/[^\w\s]/g, ' ')
-      .split(/\s+/)
-      .filter((token) => token.length > 0);
-  }
-
-  /**
    * Add a chunk to the index.
    */
   addChunk(chunk: Chunk): void {
-    const tokens = BM25Indexer.tokenize(chunk.text);
+    const tokens = tokenize(chunk.text);
     
     // Store chunk for retrieval
     this.chunkStore.set(chunk.id, chunk);
@@ -127,7 +117,7 @@ export class BM25Indexer {
 
     // Step 2: Re-score candidates using BM25 formula for consistency
     // with the hybrid search pipeline
-    const queryTerms = BM25Indexer.tokenize(query);
+    const queryTerms = tokenize(query);
     const scoredResults: Array<{
       chunkId: string;
       score: number;
@@ -174,7 +164,7 @@ export class BM25Indexer {
    * score(D, Q) = Σ IDF(qi) * (f(qi, D) * (k1 + 1)) / (f(qi, D) + k1 * (1 - b + b * |D|/avgdl))
    */
   private calculateBM25Score(documentText: string, queryTerms: string[]): number {
-    const docTerms = BM25Indexer.tokenize(documentText);
+    const docTerms = tokenize(documentText);
     const docLength = docTerms.length;
     
     // Guard against division by zero: if avgDocumentLength is 0, skip length normalization
@@ -243,7 +233,7 @@ export class BM25Indexer {
     // Estimate vocabulary size
     const termSet = new Set<string>();
     for (const chunk of this.chunkStore.values()) {
-      const tokens = BM25Indexer.tokenize(chunk.text);
+      const tokens = tokenize(chunk.text);
       for (const token of tokens) {
         termSet.add(token);
       }
@@ -313,19 +303,6 @@ export class BM25Indexer {
     return Array.from(this.chunkStore.values());
   }
 
-  /**
-   * Get the FlexSearch index (for advanced operations).
-   */
-  getIndex(): Index {
-    return this.index;
-  }
-
-  /**
-   * Get the chunk store.
-   */
-  getChunkStore(): Map<string, Chunk> {
-    return this.chunkStore;
-  }
 }
 
 /**
