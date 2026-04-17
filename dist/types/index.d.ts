@@ -263,4 +263,42 @@ export interface Subagent {
 export interface AgentFactory {
     createAgent(config: SubagentConfig): Subagent;
 }
+export type ChunkSource = 'fixed' | 'heading' | 'toc';
+export type ExtractionType = 'summary' | 'entities' | 'full' | 'custom';
+export interface SQLiteChunk {
+    id: number;
+    document_id: string;
+    chunk_id: string;
+    title: string | null;
+    content: string;
+    start_page: number;
+    end_page: number;
+    strategy: string;
+    has_tables: boolean;
+    has_images: boolean;
+    source: ChunkSource;
+}
+export interface SQLiteQueryConfig {
+    query: string;
+    extractionType?: ExtractionType;
+    customPrompt?: string;
+}
+export interface SQLiteQueryResult {
+    answer: string;
+    sources: Array<{
+        chunkId: string;
+        title: string | null;
+        source: ChunkSource;
+        startPage: number;
+        endPage: number;
+        relevantExcerpt?: string;
+    }>;
+    extractionType: ExtractionType;
+    metadata: {
+        totalChunks: number;
+        relevantChunks: number;
+        processingTimeMs: number;
+    };
+    logPath?: string;
+}
 //# sourceMappingURL=index.d.ts.map

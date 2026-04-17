@@ -15,6 +15,8 @@ from typing import Optional, List, Dict, Any, Tuple
 from dataclasses import dataclass, asdict, field
 from enum import Enum
 import uuid
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # PDF processing libraries
 try:
@@ -115,23 +117,16 @@ class ExtractionResult:
 
 class PDFExtractor:
     def __init__(self, output_dir: Optional[str] = None, save_images: bool = True, 
-                 skip_tables: bool = False, skip_ocr: bool = False, extract_font_info: bool = True):
-        """
-        Initialize PDF extractor with performance options.
-        
-        Args:
-            output_dir: Directory to save extracted data
-            save_images: Whether to extract and save images (slow)
-            skip_tables: Skip table extraction (MAJOR speedup - 5-10x faster per page)
-            skip_ocr: Skip OCR for scanned pages (3-5x faster for scanned PDFs)
-            extract_font_info: Extract detailed font metadata (adds ~0.5s per page)
-        """
+                 skip_tables: bool = False, skip_ocr: bool = False, extract_font_info: bool = True,
+                 batch_size: int = 4):
         self.output_dir = output_dir or tempfile.mkdtemp()
         self.save_images = save_images
         self.skip_tables = skip_tables
         self.skip_ocr = skip_ocr
         self.extract_font_info = extract_font_info
+        self.batch_size = min(max(batch_size, 1), 16)
         self.images_dir = os.path.join(self.output_dir, "images")
+        self._doc_lock = threading.Lock()
         if self.save_images:
             os.makedirs(self.images_dir, exist_ok=True)
     
@@ -656,6 +651,23 @@ class PDFExtractor:
         
         return groups
     
+    def _extract_single_page(self, page_num, doc, pdf_path, pdf_type, doc_id):
+        if pdf_type == PDFType.DIGITAL:
+            with self._doc_lock:
+                page_obj = self.extract_page_digital(doc[page_num - 1], page_num, pdf_path, doc_id)
+        elif pdf_type == PDFType.SCANNED:
+            page_obj = self.extract_page_scanned(pdf_path, page_num, doc_id)
+        else:  # HYBRID
+            with self._doc_lock:
+                page = doc[page_num - 1]
+                has_text = page.get_text().strip()
+            if has_text:
+                with self._doc_lock:
+                    page_obj = self.extract_page_digital(doc[page_num - 1], page_num, pdf_path, doc_id)
+            else:
+                page_obj = self.extract_page_scanned(pdf_path, page_num, doc_id)
+        return page_obj
+
     def extract(self, pdf_path: str, strategy: Optional[str] = None) -> ExtractionResult:
         """
         Main extraction pipeline.
@@ -677,20 +689,27 @@ class PDFExtractor:
         
         doc = fitz.open(pdf_path)
         
-        for page_num in range(1, len(doc) + 1):
-            if pdf_type == PDFType.DIGITAL:
-                page_obj = self.extract_page_digital(doc[page_num - 1], page_num, pdf_path, doc_id)
-            elif pdf_type == PDFType.SCANNED:
-                page_obj = self.extract_page_scanned(pdf_path, page_num, doc_id)
-            else:  # HYBRID
-                # Check if this specific page has text
-                page = doc[page_num - 1]
-                if page.get_text().strip():
-                    page_obj = self.extract_page_digital(page, page_num, pdf_path, doc_id)
-                else:
-                    page_obj = self.extract_page_scanned(pdf_path, page_num, doc_id)
+        total_pages = len(doc)
+        batch_size = self.batch_size
+        pages = []
+        
+        with ThreadPoolExecutor(max_workers=batch_size) as executor:
+            futures = {}
+            for page_num in range(1, total_pages + 1):
+                future = executor.submit(self._extract_single_page, page_num, doc, pdf_path, pdf_type, doc_id)
+                futures[future] = page_num
             
-            pages.append(page_obj)
+            for future in as_completed(futures):
+                page_num = futures[future]
+                try:
+                    page_obj = future.result()
+                    pages.append(page_obj)
+                    if len(pages) % batch_size == 0 or len(pages) == total_pages:
+                        print(f"[Batch] Processed {len(pages)}/{total_pages} pages", file=sys.stderr)
+                except Exception as e:
+                    print(f"Error processing page {page_num}: {e}", file=sys.stderr)
+        
+        pages.sort(key=lambda p: p.page_number)
         
         # Step 3: Build grouping strategies based on parameter
         all_groups = []
@@ -789,6 +808,8 @@ def main():
                        help='Skip OCR for scanned pages (3-5x faster for scanned PDFs)')
     parser.add_argument('--no-font-info', action='store_true',
                        help='Skip detailed font metadata extraction')
+    parser.add_argument('--batch-size', type=int, default=4,
+                       help='Number of pages to process in parallel (default: 4, max: 16)')
     
     args = parser.parse_args()
     
@@ -802,7 +823,8 @@ def main():
         save_images=not args.skip_images,
         skip_tables=args.skip_tables,
         skip_ocr=args.skip_ocr,
-        extract_font_info=not args.no_font_info
+        extract_font_info=not args.no_font_info,
+        batch_size=args.batch_size
     )
     
     try:

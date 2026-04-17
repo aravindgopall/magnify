@@ -1,125 +1,28 @@
 import express from 'express';
-import { createDocumentStore } from '../store/index.js';
-import { createQueryOrchestrator } from '../orchestrator/index.js';
-import { createPiMonoQueryAgent } from '../query/index.js';
+import { createSQLiteQueryPipeline } from '../query/sqlite-pipeline.js';
+import { ingestPDF } from '../ingest/pipeline.js';
+import { getDatabase } from '../db/database.js';
 const defaultAPIConfig = {
     maxFileSize: 50 * 1024 * 1024,
 };
 export function createRouter(context) {
     const router = express.Router();
-    router.post('/documents/upload', async (req, res, next) => {
+    router.post('/ingest', async (req, res, next) => {
         try {
-            const { source, fileName, groupingStrategy } = req.body;
-            if (!source) {
-                return res.status(400).json({ error: 'Source is required (file path or base64 encoded PDF)' });
+            const { filePath } = req.body;
+            if (!filePath) {
+                return res.status(400).json({ error: 'filePath is required' });
             }
-            const stored = await context.documentStore.upload(source, {
-                fileName,
-                groupingStrategy: groupingStrategy || 'toc',
-            });
+            const result = await ingestPDF(filePath);
             res.json({
-                documentId: stored.id,
-                metadata: {
-                    ...stored.metadata,
-                    pageCount: stored.document.metadata.pageCount,
-                    title: stored.document.metadata.title,
+                documentId: result.documentId,
+                totalPages: result.totalPages,
+                chunks: {
+                    fixed: result.fixedChunks,
+                    heading: result.headingChunks,
+                    toc: result.tocChunks,
                 },
-                groups: stored.groups.map(g => ({
-                    id: g.id,
-                    title: g.title,
-                    startPage: g.startPage,
-                    endPage: g.endPage,
-                    type: g.type,
-                })),
             });
-        }
-        catch (error) {
-            next(error);
-        }
-    });
-    router.get('/documents', (_req, res) => {
-        const documents = context.documentStore.list();
-        res.json({
-            documents: documents.map(d => ({
-                id: d.id,
-                metadata: {
-                    ...d.metadata,
-                    pageCount: d.document.metadata.pageCount,
-                    title: d.document.metadata.title,
-                },
-                groupCount: d.groups.length,
-            })),
-        });
-    });
-    router.get('/documents/:id', (req, res) => {
-        const { id } = req.params;
-        const stored = context.documentStore.get(id);
-        if (!stored) {
-            return res.status(404).json({ error: 'Document not found' });
-        }
-        res.json({
-            documentId: stored.id,
-            metadata: {
-                ...stored.metadata,
-                pageCount: stored.document.metadata.pageCount,
-                title: stored.document.metadata.title,
-                author: stored.document.metadata.author,
-            },
-            groups: stored.groups.map(g => ({
-                id: g.id,
-                title: g.title,
-                startPage: g.startPage,
-                endPage: g.endPage,
-                type: g.type,
-            })),
-            toc: stored.document.toc,
-        });
-    });
-    router.get('/documents/:id/groups', (req, res) => {
-        const { id } = req.params;
-        const stored = context.documentStore.get(id);
-        if (!stored) {
-            return res.status(404).json({ error: 'Document not found' });
-        }
-        res.json({
-            documentId: id,
-            groups: stored.groups.map(g => ({
-                id: g.id,
-                title: g.title,
-                startPage: g.startPage,
-                endPage: g.endPage,
-                type: g.type,
-                pageCount: g.pages.length,
-            })),
-        });
-    });
-    router.get('/documents/:id/groups/:groupId', (req, res) => {
-        const { id, groupId } = req.params;
-        const group = context.documentStore.getGroup(id, groupId);
-        if (!group) {
-            return res.status(404).json({ error: 'Group not found' });
-        }
-        res.json({
-            id: group.id,
-            title: group.title,
-            startPage: group.startPage,
-            endPage: group.endPage,
-            type: group.type,
-            pageCount: group.pages.length,
-            preview: group.pages.map(p => ({
-                number: p.number,
-                textPreview: p.text.substring(0, 200) + (p.text.length > 200 ? '...' : ''),
-            })),
-        });
-    });
-    router.delete('/documents/:id', async (req, res, next) => {
-        try {
-            const { id } = req.params;
-            const deleted = await context.documentStore.delete(id);
-            if (!deleted) {
-                return res.status(404).json({ error: 'Document not found' });
-            }
-            res.json({ message: 'Document deleted', documentId: id });
         }
         catch (error) {
             next(error);
@@ -127,39 +30,25 @@ export function createRouter(context) {
     });
     router.post('/query', async (req, res, next) => {
         try {
-            const { documentId, query, groupIds, extractionType, customPrompt } = req.body;
-            if (!documentId || !query) {
-                return res.status(400).json({ error: 'documentId and query are required' });
+            const { query, extractionType } = req.body;
+            if (!query) {
+                return res.status(400).json({ error: 'query is required' });
             }
-            const response = await context.queryOrchestrator.execute({
-                documentId,
-                query,
-                groupIds,
-                extractionType,
-                customPrompt,
-            });
-            res.json(response);
+            const result = await context.queryPipeline.execute({ query, extractionType });
+            res.json(result);
         }
         catch (error) {
             next(error);
         }
     });
-    // New endpoint using PiMonoQueryAgent
     router.post('/query-agents', async (req, res, next) => {
         try {
-            const { documentId, query, maxParallelSubAgents, extractionType, customPrompt } = req.body;
-            if (!documentId || !query) {
-                return res.status(400).json({ error: 'documentId and query are required' });
+            const { query, extractionType } = req.body;
+            if (!query) {
+                return res.status(400).json({ error: 'query is required' });
             }
-            const result = await context.piMonoQueryAgent.execute({
-                documentId,
-                query,
-                maxParallelSubAgents,
-                extractionType,
-                customPrompt,
-            });
+            const result = await context.queryPipeline.execute({ query, extractionType });
             res.json({
-                documentId,
                 query,
                 result,
             });
@@ -168,52 +57,65 @@ export function createRouter(context) {
             next(error);
         }
     });
-    router.post('/documents/:id/query', async (req, res, next) => {
+    router.get('/health', async (_req, res) => {
         try {
-            const { id } = req.params;
-            const { query, groupIds, extractionType, customPrompt } = req.body;
-            if (!query) {
-                return res.status(400).json({ error: 'query is required' });
-            }
-            const response = await context.queryOrchestrator.execute({
-                documentId: id,
-                query,
-                groupIds,
-                extractionType,
-                customPrompt,
+            const fixedDb = getDatabase('fixed');
+            const headingDb = getDatabase('heading');
+            const tocDb = getDatabase('toc');
+            const fixedCount = fixedDb.getChunkCount();
+            const headingCount = headingDb.getChunkCount();
+            const tocCount = tocDb.getChunkCount();
+            res.json({
+                status: 'healthy',
+                databases: {
+                    fixed_chunks: { count: fixedCount },
+                    heading_chunks: { count: headingCount },
+                    toc_chunks: { count: tocCount },
+                },
+                totalChunks: fixedCount + headingCount + tocCount,
             });
-            res.json(response);
         }
         catch (error) {
-            next(error);
+            res.status(500).json({
+                status: 'unhealthy',
+                error: error instanceof Error ? error.message : String(error),
+            });
         }
     });
-    router.get('/health', async (_req, res) => {
-        const stats = await context.documentStore.getStats();
-        res.json({
-            status: 'healthy',
-            documentsStored: stats.documentCount,
-            persistence: stats.persistence,
-            llmConfigured: !!context.llmClient,
-        });
+    router.get('/stats', async (_req, res) => {
+        try {
+            const fixedDb = getDatabase('fixed');
+            const headingDb = getDatabase('heading');
+            const tocDb = getDatabase('toc');
+            const fixedDocs = fixedDb.getDocuments();
+            const headingDocs = headingDb.getDocuments();
+            const tocDocs = tocDb.getDocuments();
+            const allDocs = [...fixedDocs, ...headingDocs, ...tocDocs];
+            const uniqueDocs = [...new Map(allDocs.map(d => [d.id, d])).values()];
+            res.json({
+                documents: uniqueDocs.map(d => ({
+                    id: d.id,
+                    fileName: d.file_name,
+                    totalPages: d.total_pages,
+                    createdAt: d.created_at,
+                })),
+                chunks: {
+                    fixed: fixedDb.getChunkCount(),
+                    heading: headingDb.getChunkCount(),
+                    toc: tocDb.getChunkCount(),
+                },
+            });
+        }
+        catch (error) {
+            res.status(500).json({
+                error: error instanceof Error ? error.message : String(error),
+            });
+        }
     });
     return router;
 }
-export function createAPIContext(llmClient) {
-    const documentStore = createDocumentStore(llmClient);
-    const queryOrchestrator = createQueryOrchestrator(llmClient, documentStore);
-    const piMonoQueryAgent = createPiMonoQueryAgent(documentStore);
-    return {
-        documentStore,
-        queryOrchestrator,
-        piMonoQueryAgent,
-        llmClient,
-    };
-}
-/**
- * Initialize the API context by loading persisted documents
- */
-export async function initializeAPIContext(context) {
-    await context.documentStore.initialize();
+export function createAPIContext() {
+    const queryPipeline = createSQLiteQueryPipeline();
+    return { queryPipeline };
 }
 //# sourceMappingURL=routes.js.map

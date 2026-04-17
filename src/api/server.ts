@@ -1,39 +1,22 @@
 import express, { type Express, type Request, type Response, type NextFunction } from 'express';
 import cors from 'cors';
-import { createLLMClient, type LLMClient } from '../llm/index.js';
-import { createRouter, createAPIContext, initializeAPIContext, type APIContext } from './routes.js';
+import { createRouter, createAPIContext, type APIContext } from './routes.js';
 
 export interface ServerConfig {
   port: number;
   host: string;
-  llm: {
-    provider: 'openai' | 'litellm' | 'mock';
-    apiKey?: string;
-    model?: string;
-    baseURL?: string;
-  };
   dataDir?: string;
 }
 
 const defaultServerConfig: ServerConfig = {
   port: 3000,
   host: '0.0.0.0',
-  llm: {
-    provider: 'mock',
-  },
 };
 
 export function createServer(config?: Partial<ServerConfig>): { app: Express; context: APIContext } {
   const finalConfig = { ...defaultServerConfig, ...config };
   
-  const llmClient = createLLMClient({
-    provider: finalConfig.llm.provider,
-    apiKey: finalConfig.llm.apiKey,
-    model: finalConfig.llm.model,
-    baseURL: finalConfig.llm.baseURL,
-  });
-  
-  const context = createAPIContext(llmClient);
+  const context = createAPIContext();
   
   const app = express();
 
@@ -46,29 +29,23 @@ export function createServer(config?: Partial<ServerConfig>): { app: Express; co
   app.get('/', (_req: Request, res: Response) => {
     res.json({
       name: 'Magnify - Semantic PDF Scraper',
-      version: '2.1.0',
-      description: 'Upload once, query many times with LLM-powered orchestration',
+      version: '3.0.0',
+      description: 'Ingest PDFs, query with AI-powered multi-agent orchestration',
       features: {
-        persistentStorage: true,
-        llmConfigured: !!llmClient,
+        sqliteDatabases: true,
+        parallelSubagents: true,
+        llmClassification: true,
       },
-      workflow: {
-        '1. Upload': 'POST /api/documents/upload - Upload and group PDF',
-        '2a. Query (Native)': 'POST /api/query - Query using native Magnify orchestrator',
-        '2b. Query (Pi-Mono)': 'POST /api/query-agents - Query using pi-mono multi-agent pipeline',
+      cli: {
+        'npm ingest <file_path>': 'Ingest a PDF into SQLite databases',
+        'npm query "question"': 'Query ingested documents',
       },
       endpoints: {
-        'POST /api/documents/upload': 'Upload PDF, returns document ID and groups',
-        'GET /api/documents': 'List all uploaded documents',
-        'GET /api/documents/:id': 'Get document details and groups',
-        'GET /api/documents/:id/groups': 'Get all groups for a document',
-        'GET /api/documents/:id/groups/:groupId': 'Get specific group details',
-        'DELETE /api/documents/:id': 'Delete a document',
-        'POST /api/query': 'Query any document (native Magnify)',
+        'POST /api/ingest': 'Ingest a PDF file',
+        'POST /api/query': 'Query documents (auto-classified)',
         'POST /api/query-agents': 'Query using pi-mono multi-agent pipeline',
-        'POST /api/documents/:id/query': 'Query a specific document (native)',
-        'POST /api/documents/:id/query-agents': 'Query using pi-mono agents',
-        'GET /api/health': 'Health check with storage stats',
+        'GET /api/health': 'Health check with database stats',
+        'GET /api/stats': 'Get ingestion statistics',
       },
     });
   });
@@ -86,15 +63,16 @@ export function createServer(config?: Partial<ServerConfig>): { app: Express; co
 
 export async function startServer(config?: Partial<ServerConfig>): Promise<{ app: Express; server: ReturnType<Express['listen']> }> {
   const finalConfig = { ...defaultServerConfig, ...config };
-  const { app, context } = createServer(finalConfig);
-
-  // Initialize document store (load persisted documents)
-  await initializeAPIContext(context);
+  const { app } = createServer(finalConfig);
 
   return new Promise((resolve) => {
     const server = app.listen(finalConfig.port, finalConfig.host, () => {
       console.log(`Magnify PDF Scraper API running at http://${finalConfig.host}:${finalConfig.port}`);
-      console.log(`LLM Provider: ${finalConfig.llm.provider}`);
+      console.log('');
+      console.log('CLI Commands:');
+      console.log('  npm ingest <file_path>  - Ingest a PDF');
+      console.log('  npm query "question"    - Query documents');
+      console.log('');
       resolve({ app, server });
     });
   });

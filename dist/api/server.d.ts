@@ -3,12 +3,6 @@ import { type APIContext } from './routes.js';
 export interface ServerConfig {
     port: number;
     host: string;
-    llm: {
-        provider: 'openai' | 'litellm' | 'mock';
-        apiKey?: string;
-        model?: string;
-        baseURL?: string;
-    };
     dataDir?: string;
 }
 export declare function createServer(config?: Partial<ServerConfig>): {

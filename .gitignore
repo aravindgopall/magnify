@@ -4,3 +4,5 @@ data/
 .env
 logs/
 
+test_hyrbid/
+
