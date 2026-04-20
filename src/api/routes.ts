@@ -1,11 +1,13 @@
 import express, { type Request, type Response, type NextFunction, type Router } from 'express';
 import { SQLiteQueryPipeline, createSQLiteQueryPipeline } from '../query/sqlite-pipeline.js';
+import { ParallelQueryPipeline, createParallelQueryPipeline } from '../query/parallel-query-pipeline.js';
 import { ingestPDF } from '../ingest/pipeline.js';
 import { getDatabase } from '../db/database.js';
 import type { ExtractionType } from '../types/index.js';
 
 export interface APIContext {
   queryPipeline: SQLiteQueryPipeline;
+  parallelQueryPipeline: ParallelQueryPipeline;
 }
 
 export interface APIConfig {
@@ -84,6 +86,25 @@ export function createRouter(context: APIContext): Router {
     }
   });
 
+  router.post('/query-parallel', async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { query, extractionType } = req.body as {
+        query: string;
+        extractionType?: ExtractionType;
+      };
+
+      if (!query) {
+        return res.status(400).json({ error: 'query is required' });
+      }
+
+      const result = await context.parallelQueryPipeline.execute({ query, extractionType });
+
+      res.json(result);
+    } catch (error) {
+      next(error);
+    }
+  });
+
   router.get('/health', async (_req: Request, res: Response) => {
     try {
       const fixedDb = getDatabase('fixed');
@@ -149,5 +170,6 @@ export function createRouter(context: APIContext): Router {
 
 export function createAPIContext(): APIContext {
   const queryPipeline = createSQLiteQueryPipeline();
-  return { queryPipeline };
+  const parallelQueryPipeline = createParallelQueryPipeline();
+  return { queryPipeline, parallelQueryPipeline };
 }

@@ -1,5 +1,6 @@
 import express from 'express';
 import { createSQLiteQueryPipeline } from '../query/sqlite-pipeline.js';
+import { createParallelQueryPipeline } from '../query/parallel-query-pipeline.js';
 import { ingestPDF } from '../ingest/pipeline.js';
 import { getDatabase } from '../db/database.js';
 const defaultAPIConfig = {
@@ -52,6 +53,19 @@ export function createRouter(context) {
                 query,
                 result,
             });
+        }
+        catch (error) {
+            next(error);
+        }
+    });
+    router.post('/query-parallel', async (req, res, next) => {
+        try {
+            const { query, extractionType } = req.body;
+            if (!query) {
+                return res.status(400).json({ error: 'query is required' });
+            }
+            const result = await context.parallelQueryPipeline.execute({ query, extractionType });
+            res.json(result);
         }
         catch (error) {
             next(error);
@@ -116,6 +130,7 @@ export function createRouter(context) {
 }
 export function createAPIContext() {
     const queryPipeline = createSQLiteQueryPipeline();
-    return { queryPipeline };
+    const parallelQueryPipeline = createParallelQueryPipeline();
+    return { queryPipeline, parallelQueryPipeline };
 }
 //# sourceMappingURL=routes.js.map
